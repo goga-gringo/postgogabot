@@ -59,6 +59,21 @@ def parse_link_buttons(text: str):
     return rows, None
 
 
+def _extract_url_buttons(reply_markup):
+    """Если у входящего сообщения (например, пересланного поста) уже была
+    инлайн-клавиатура — вытаскиваем из неё только кнопки-ссылки (url), чтобы
+    сохранить их в новом посте. Кнопки с callback_data пропускаем — они всё
+    равно ведут на чужого бота и не будут работать."""
+    if not reply_markup or not getattr(reply_markup, "inline_keyboard", None):
+        return None
+    rows = []
+    for row in reply_markup.inline_keyboard:
+        r = [{"text": btn.text, "url": btn.url} for btn in row if btn.url]
+        if r:
+            rows.append(r)
+    return rows or None
+
+
 # ---------- запуск сценария: сначала выбор каналов ----------
 
 async def start_new_post(message: Message, state: FSMContext, from_user_id: int):
@@ -134,7 +149,7 @@ async def receive_single_media(message: Message, state: FSMContext):
         album_items=None,
         source_chat_id=message.chat.id,
         source_message_ids=[message.message_id],
-        link_buttons=None,
+        link_buttons=_extract_url_buttons(message.reply_markup),
     )
     await _go_to_delete_after(message, state)
 
@@ -194,14 +209,14 @@ async def receive_text_content(message: Message, state: FSMContext):
         album_items=None,
         source_chat_id=message.chat.id,
         source_message_ids=[message.message_id],
-        link_buttons=None,
+        link_buttons=_extract_url_buttons(message.reply_markup),
     )
     await _go_to_delete_after(message, state)
 
 
 # ---------- дружелюбная подсказка, если контент прислали без активного сценария ----------
 
-@router.message((F.photo | F.video | F.text | F.media_group_id) & StateFilter(None))
+@router.message(F.photo | F.video | F.text | F.media_group_id, StateFilter(None))
 async def stray_content(message: Message):
     if message.text and message.text.startswith("/"):
         return
@@ -323,7 +338,7 @@ async def start_add_link_buttons(callback: CallbackQuery, state: FSMContext):
         "<code>Текст - ссылка</code>\n"
         "Несколько кнопок в один ряд — через <code>|</code>\n\n"
         "Например:\n"
-        "<code>Sweet - t.me/+TrZYZoeqUbQ2M</code>\n"
+        "<code>Подписаться - t.me/durov</code>\n"
         "<code>Сайт - https://example.com | Чат - https://t.me/chat</code>",
         reply_markup=back_only_keyboard(),
     )
