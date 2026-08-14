@@ -10,6 +10,7 @@ from bot.keyboards import (
 )
 from bot.handlers.channels import cmd_channels
 from bot.handlers.edit import cmd_myposts
+from bot.handlers.posts import start_new_post
 
 router = Router()
 
@@ -17,10 +18,7 @@ router = Router()
 @router.message(F.text == MENU_CREATE)
 async def menu_create(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer(
-        "Пришли текст, фото, видео или альбом (несколько фото/видео разом) — "
-        "это станет черновиком поста. Дальше спрошу каналы, автоудаление и время публикации."
-    )
+    await start_new_post(message, state, message.from_user.id)
 
 
 @router.message(F.text == MENU_CHANNELS)

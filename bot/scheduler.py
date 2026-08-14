@@ -11,37 +11,64 @@ from bot.entities_util import deserialize_entities
 logger = logging.getLogger(__name__)
 
 
-async def _publish_one(bot: Bot, row):
+async def _publish_via_copy(bot: Bot, row) -> list[int] | None:
+    """Пытаемся опубликовать через copyMessage(s) — Telegram копирует сообщение
+    как есть на своей стороне, со всеми entities (включая premium-эмодзи),
+    без пересборки ботом. Возвращает None, если не получилось (сообщение
+    в личке удалено, пост правили и т.п.) — тогда используем реконструкцию."""
+    if row["text_edited"] or not row["source_chat_id"] or not row["source_message_ids"]:
+        return None
+    try:
+        if row["media_type"] == "album":
+            results = await bot.copy_messages(row["chat_id"], row["source_chat_id"], row["source_message_ids"])
+            return [r.message_id for r in results]
+        else:
+            result = await bot.copy_message(row["chat_id"], row["source_chat_id"], row["source_message_ids"][0])
+            return [result.message_id]
+    except Exception as e:
+        logger.warning("copy_message failed for target %s, falling back to reconstruct: %s", row["target_id"], e)
+        return None
+
+
+async def _publish_via_reconstruct(bot: Bot, row) -> list[int]:
+    """Запасной путь: пересобираем сообщение из file_id + текст + entities.
+    Используется, если пост правили после создания, или если copy не удался."""
     chat_id = row["chat_id"]
     entities = deserialize_entities(row["entities_json"])
+
+    if row["media_type"] == "photo":
+        msg = await bot.send_photo(chat_id, row["file_id"], caption=row["text"], caption_entities=entities)
+        return [msg.message_id]
+
+    if row["media_type"] == "video":
+        msg = await bot.send_video(chat_id, row["file_id"], caption=row["text"], caption_entities=entities)
+        return [msg.message_id]
+
+    if row["media_type"] == "album":
+        items = await db.get_album_items(row["post_id"])
+        media = []
+        for i, item in enumerate(items):
+            cls = InputMediaPhoto if item["media_type"] == "photo" else InputMediaVideo
+            kwargs = {}
+            if i == 0 and row["text"]:
+                kwargs["caption"] = row["text"]
+                kwargs["caption_entities"] = entities
+            media.append(cls(media=item["file_id"], **kwargs))
+        msgs = await bot.send_media_group(chat_id, media)
+        return [m.message_id for m in msgs]
+
+    msg = await bot.send_message(chat_id, row["text"], entities=entities)
+    return [msg.message_id]
+
+
+async def _publish_one(bot: Bot, row):
     try:
-        if row["media_type"] == "photo":
-            msg = await bot.send_photo(chat_id, row["file_id"], caption=row["text"], caption_entities=entities)
-            message_ids = [msg.message_id]
-
-        elif row["media_type"] == "video":
-            msg = await bot.send_video(chat_id, row["file_id"], caption=row["text"], caption_entities=entities)
-            message_ids = [msg.message_id]
-
-        elif row["media_type"] == "album":
-            items = await db.get_album_items(row["post_id"])
-            media = []
-            for i, item in enumerate(items):
-                cls = InputMediaPhoto if item["media_type"] == "photo" else InputMediaVideo
-                kwargs = {}
-                if i == 0 and row["text"]:
-                    kwargs["caption"] = row["text"]
-                    kwargs["caption_entities"] = entities
-                media.append(cls(media=item["file_id"], **kwargs))
-            msgs = await bot.send_media_group(chat_id, media)
-            message_ids = [m.message_id for m in msgs]
-
-        else:  # text
-            msg = await bot.send_message(chat_id, row["text"], entities=entities)
-            message_ids = [msg.message_id]
+        message_ids = await _publish_via_copy(bot, row)
+        if message_ids is None:
+            message_ids = await _publish_via_reconstruct(bot, row)
 
         await db.mark_published(row["target_id"], message_ids, row["delete_after_hours"])
-        logger.info("Published target %s to chat %s (%d msg)", row["target_id"], chat_id, len(message_ids))
+        logger.info("Published target %s to chat %s (%d msg)", row["target_id"], row["chat_id"], len(message_ids))
     except Exception as e:
         logger.exception("Failed to publish target %s", row["target_id"])
         await db.mark_failed(row["target_id"], str(e))

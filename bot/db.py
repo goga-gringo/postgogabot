@@ -92,15 +92,16 @@ async def remove_channel(owner_id: int, channel_id: int):
 async def create_post(
     owner_id: int, text: str | None, media_type: str | None, file_id: str | None,
     entities_json: str | None = None,
+    source_chat_id: int | None = None, source_message_ids: list[int] | None = None,
 ) -> int:
     async with pool().acquire() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO posts (owner_id, text, media_type, file_id, entities_json)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO posts (owner_id, text, media_type, file_id, entities_json, source_chat_id, source_message_ids)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::bigint[])
             RETURNING id
             """,
-            owner_id, text, media_type, file_id, entities_json,
+            owner_id, text, media_type, file_id, entities_json, source_chat_id, source_message_ids,
         )
         return row["id"]
 
@@ -113,7 +114,7 @@ async def get_post(post_id: int):
 async def update_post_text(post_id: int, text: str | None, entities_json: str | None = None):
     async with pool().acquire() as conn:
         await conn.execute(
-            "UPDATE posts SET text = $2, entities_json = $3 WHERE id = $1",
+            "UPDATE posts SET text = $2, entities_json = $3, text_edited = true WHERE id = $1",
             post_id, text, entities_json,
         )
 
@@ -181,6 +182,7 @@ async def fetch_due_to_publish():
             """
             SELECT pt.id AS target_id, pt.post_id, pt.channel_id, pt.delete_after_hours,
                    p.text, p.media_type, p.file_id, p.entities_json,
+                   p.source_chat_id, p.source_message_ids, p.text_edited,
                    c.chat_id
             FROM post_targets pt
             JOIN posts p ON p.id = pt.post_id

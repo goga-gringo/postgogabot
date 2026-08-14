@@ -26,117 +26,22 @@ def _delete_after_label(hours: int | None) -> str:
     return "не удалять" if not hours else f"удалить через {hours}ч"
 
 
-async def _start_post_flow(
-    message: Message,
-    state: FSMContext,
-    from_user_id: int,
-    media_type: str,
-    file_id: str | None,
-    text: str | None,
-    entities_json: str | None = None,
-    album_items: list[dict] | None = None,
-):
+# ---------- запуск сценария: сначала выбор каналов ----------
+
+async def start_new_post(message: Message, state: FSMContext, from_user_id: int):
     user_id = await db.get_or_create_user(from_user_id)
     channels = await db.list_channels(user_id)
     if not channels:
         await message.answer("Сначала подключи хотя бы один канал: «📢 Мои каналы»")
         return
 
-    await state.update_data(
-        media_type=media_type,
-        file_id=file_id,
-        text=text,
-        entities_json=entities_json,
-        album_items=album_items,
-        selected_channels=[],
-        user_id=user_id,
-    )
+    await state.update_data(selected_channels=[], user_id=user_id)
     await state.set_state(NewPost.choosing_channels)
     await message.answer(
         "В какие каналы постим? Отметь один или несколько:",
         reply_markup=channels_keyboard(channels, set()),
     )
 
-
-# ---------- шаг 1a: одиночное фото/видео (не альбом) ----------
-
-@router.message((F.photo | F.video) & ~F.media_group_id, StateFilter(None))
-async def receive_single_media(message: Message, state: FSMContext):
-    media_type = "photo" if message.photo else "video"
-    file_id = message.photo[-1].file_id if message.photo else message.video.file_id
-    await _start_post_flow(
-        message, state, message.from_user.id, media_type, file_id,
-        message.caption, serialize_entities(message.caption_entities),
-    )
-
-
-# ---------- шаг 1b: альбом (несколько фото/видео) ----------
-
-@router.message(F.media_group_id, StateFilter(None))
-async def receive_album_part(message: Message, state: FSMContext, bot: Bot):
-    gid = message.media_group_id
-    buf = _album_buffers.setdefault(gid, [])
-    buf.append(message)
-    if len(buf) == 1:
-        asyncio.create_task(_process_album(gid, message.chat.id, message.from_user.id, state, bot))
-
-
-async def _process_album(gid: str, chat_id: int, from_user_id: int, state: FSMContext, bot: Bot):
-    await asyncio.sleep(ALBUM_WAIT_SECONDS)
-    messages = _album_buffers.pop(gid, [])
-    if not messages:
-        return
-    messages.sort(key=lambda m: m.message_id)
-
-    items = []
-    caption_text = None
-    caption_entities_json = None
-    for m in messages:
-        if m.photo:
-            items.append({"type": "photo", "file_id": m.photo[-1].file_id})
-        elif m.video:
-            items.append({"type": "video", "file_id": m.video.file_id})
-        if m.caption and not caption_text:
-            caption_text = m.caption
-            caption_entities_json = serialize_entities(m.caption_entities)
-
-    if not items:
-        return
-
-    user_id = await db.get_or_create_user(from_user_id)
-    channels = await db.list_channels(user_id)
-    if not channels:
-        await bot.send_message(chat_id, "Сначала подключи хотя бы один канал: «📢 Мои каналы»")
-        return
-
-    await state.update_data(
-        media_type="album",
-        file_id=None,
-        text=caption_text,
-        entities_json=caption_entities_json,
-        album_items=items,
-        selected_channels=[],
-        user_id=user_id,
-    )
-    await state.set_state(NewPost.choosing_channels)
-    await bot.send_message(
-        chat_id,
-        f"Альбом из {len(items)} медиафайлов. В какие каналы постим?",
-        reply_markup=channels_keyboard(channels, set()),
-    )
-
-
-# ---------- шаг 1c: просто текст ----------
-
-@router.message(F.text & ~F.text.startswith("/"), StateFilter(None))
-async def receive_text_content(message: Message, state: FSMContext):
-    await _start_post_flow(
-        message, state, message.from_user.id, "text", None,
-        message.text, serialize_entities(message.entities),
-    )
-
-
-# ---------- шаг 2: выбор каналов (toggle) ----------
 
 @router.callback_query(NewPost.choosing_channels, F.data.startswith("ch:"))
 async def toggle_channel(callback: CallbackQuery, state: FSMContext):
@@ -160,16 +65,113 @@ async def channels_done(callback: CallbackQuery, state: FSMContext):
     if not data.get("selected_channels"):
         await callback.answer("Выбери хотя бы один канал!", show_alert=True)
         return
-    await state.set_state(NewPost.choosing_delete_after)
-    user = await db.get_user(data["user_id"])
-    default_hours = user["default_delete_after_hours"] if user else None
+    await state.set_state(NewPost.waiting_content)
     await callback.message.edit_text(
-        "Когда удалить пост после публикации?", reply_markup=delete_after_keyboard(default_hours)
+        "Каналы выбраны ✅\n\nТеперь пришли текст, фото, видео или альбом — "
+        "это станет содержимым поста."
     )
     await callback.answer()
 
 
-# ---------- шаг 3: через сколько удалить → показываем предпросмотр ----------
+# ---------- контент принимаем только после того, как выбраны каналы ----------
+
+@router.message((F.photo | F.video) & ~F.media_group_id, NewPost.waiting_content)
+async def receive_single_media(message: Message, state: FSMContext):
+    media_type = "photo" if message.photo else "video"
+    file_id = message.photo[-1].file_id if message.photo else message.video.file_id
+    await state.update_data(
+        media_type=media_type,
+        file_id=file_id,
+        text=message.caption,
+        entities_json=serialize_entities(message.caption_entities),
+        album_items=None,
+        source_chat_id=message.chat.id,
+        source_message_ids=[message.message_id],
+    )
+    await _go_to_delete_after(message, state)
+
+
+@router.message(F.media_group_id, NewPost.waiting_content)
+async def receive_album_part(message: Message, state: FSMContext, bot: Bot):
+    gid = message.media_group_id
+    buf = _album_buffers.setdefault(gid, [])
+    buf.append(message)
+    if len(buf) == 1:
+        asyncio.create_task(_process_album(gid, state, bot))
+
+
+async def _process_album(gid: str, state: FSMContext, bot: Bot):
+    await asyncio.sleep(ALBUM_WAIT_SECONDS)
+    messages = _album_buffers.pop(gid, [])
+    if not messages:
+        return
+    messages.sort(key=lambda m: m.message_id)
+
+    items = []
+    caption_text = None
+    caption_entities_json = None
+    for m in messages:
+        if m.photo:
+            items.append({"type": "photo", "file_id": m.photo[-1].file_id})
+        elif m.video:
+            items.append({"type": "video", "file_id": m.video.file_id})
+        if m.caption and not caption_text:
+            caption_text = m.caption
+            caption_entities_json = serialize_entities(m.caption_entities)
+
+    if not items:
+        return
+
+    await state.update_data(
+        media_type="album",
+        file_id=None,
+        text=caption_text,
+        entities_json=caption_entities_json,
+        album_items=items,
+        source_chat_id=messages[0].chat.id,
+        source_message_ids=[m.message_id for m in messages],
+    )
+    await bot.send_message(messages[0].chat.id, f"Альбом из {len(items)} медиафайлов принят.")
+    await _go_to_delete_after(messages[0], state)
+
+
+@router.message(F.text & ~F.text.startswith("/"), NewPost.waiting_content)
+async def receive_text_content(message: Message, state: FSMContext):
+    await state.update_data(
+        media_type="text",
+        file_id=None,
+        text=message.text,
+        entities_json=serialize_entities(message.entities),
+        album_items=None,
+        source_chat_id=message.chat.id,
+        source_message_ids=[message.message_id],
+    )
+    await _go_to_delete_after(message, state)
+
+
+# ---------- дружелюбная подсказка, если контент прислали без активного сценария ----------
+
+@router.message((F.photo | F.video | F.text | F.media_group_id) & StateFilter(None))
+async def stray_content(message: Message):
+    if message.text and message.text.startswith("/"):
+        return
+    await message.answer(
+        "Чтобы создать пост, сначала нажми «📝 Создать пост» внизу — "
+        "там сперва выбираем каналы, потом присылаем контент."
+    )
+
+
+# ---------- шаг: через сколько удалить → показываем предпросмотр ----------
+
+async def _go_to_delete_after(message: Message, state: FSMContext):
+    await state.set_state(NewPost.choosing_delete_after)
+    data = await state.get_data()
+    user = await db.get_user(data["user_id"])
+    default_hours = user["default_delete_after_hours"] if user else None
+    await message.answer(
+        "Когда удалить пост после публикации?", reply_markup=delete_after_keyboard(default_hours)
+    )
+
 
 @router.callback_query(NewPost.choosing_delete_after, F.data.startswith("del:"))
 async def choose_delete_after(callback: CallbackQuery, state: FSMContext):
@@ -214,7 +216,7 @@ async def _send_preview(message: Message, data: dict):
         await message.answer(text or "(пусто)", entities=entities, reply_markup=when_keyboard())
 
 
-# ---------- шаг 4: когда публиковать ----------
+# ---------- шаг: когда публиковать ----------
 
 @router.callback_query(NewPost.choosing_time, F.data.startswith("when:"))
 async def choose_when(callback: CallbackQuery, state: FSMContext, bot: Bot):
@@ -268,7 +270,7 @@ async def _finalize(message: Message, state: FSMContext, bot: Bot, publish_at: d
     data = await state.get_data()
     post_id = await db.create_post(
         data["user_id"], data.get("text"), data["media_type"], data.get("file_id"),
-        data.get("entities_json"),
+        data.get("entities_json"), data.get("source_chat_id"), data.get("source_message_ids"),
     )
 
     if data["media_type"] == "album" and data.get("album_items"):

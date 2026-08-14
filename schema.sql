@@ -33,6 +33,15 @@ CREATE TABLE IF NOT EXISTS posts (
 
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS entities_json TEXT;
 
+-- Откуда скопировать оригинал при публикации (chat_id/message_id(s) в личке с ботом).
+-- copyMessage/copyMessages сохраняют premium-эмодзи и любые другие entities как есть —
+-- надёжнее, чем пересобирать сообщение через send* с ручными entities.
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS source_chat_id BIGINT;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS source_message_ids BIGINT[];
+-- Если текст поста правили после создания (через "Мои посты") — оригинал в личке
+-- уже не соответствует новому тексту, публикуем через пересборку (file_id + entities).
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS text_edited BOOLEAN NOT NULL DEFAULT false;
+
 -- Элементы альбома (media_type = 'album'), по порядку
 CREATE TABLE IF NOT EXISTS post_media (
     id BIGSERIAL PRIMARY KEY,
