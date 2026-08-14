@@ -31,18 +31,17 @@ def channels_keyboard(channels, selected: set[int]) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+HOUR_OPTIONS = [1, 2, 4, 8, 12, 24, 48, 72]
+
+
 def delete_after_keyboard(default_hours: int | None = None) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    options = [
-        (24, "Удалить через 24ч"),
-        (48, "Удалить через 48ч"),
-        (72, "Удалить через 72ч"),
-        (0, "Не удалять"),
-    ]
-    for hours, label in options:
-        star = "⭐ " if (default_hours or 0) == hours else ""
-        b.button(text=f"{star}{label}", callback_data=f"del:{hours}")
-    b.adjust(1)
+    for hours in HOUR_OPTIONS:
+        star = "⭐" if (default_hours or 0) == hours else ""
+        b.button(text=f"{star}{hours}ч", callback_data=f"del:{hours}")
+    never_star = "⭐" if not default_hours else ""
+    b.button(text=f"{never_star}Не удалять", callback_data="del:0")
+    b.adjust(4, 4, 1)
     return b.as_markup()
 
 
@@ -75,9 +74,11 @@ def settings_keyboard(current_tz: str, current_default_hours: int | None) -> Inl
         b.button(text=f"{mark}{label}", callback_data=f"tz:{tz_name}")
     b.adjust(1)
 
-    for hours, label in [(24, "24ч"), (48, "48ч"), (72, "72ч"), (0, "не удалять")]:
+    for hours in HOUR_OPTIONS:
         mark = "✅ " if (current_default_hours or 0) == hours else "◻️ "
-        b.button(text=f"{mark}Автоудаление по умолчанию: {label}", callback_data=f"defdel:{hours}")
+        b.button(text=f"{mark}По умолчанию: {hours}ч", callback_data=f"defdel:{hours}")
+    never_mark = "✅ " if not current_default_hours else "◻️ "
+    b.button(text=f"{never_mark}По умолчанию: не удалять", callback_data="defdel:0")
     b.adjust(1)
 
     return b.as_markup()

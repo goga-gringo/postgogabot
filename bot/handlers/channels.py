@@ -1,3 +1,7 @@
+import random
+import string
+import time
+
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, MessageOriginChannel
@@ -7,15 +11,28 @@ from bot.keyboards import channels_menu_keyboard
 
 router = Router()
 
-ADD_CHANNEL_HINT = (
-    "Чтобы подключить канал:\n\n"
-    "1. Добавь меня в канал как администратора с правами:\n"
-    "   • Публикация сообщений\n"
-    "   • Редактирование сообщений других пользователей\n"
-    "   • Удаление сообщений\n"
-    "2. Перешли мне (сюда, в личку) любое сообщение из этого канала.\n\n"
-    "Я проверю права и подключу канал."
-)
+# Коды подтверждения канала: код -> {tg_id, expires}. Живут в памяти процесса —
+# этого достаточно, они короткоживущие (10 минут) и на один инстанс бота.
+_pending_codes: dict[str, dict] = {}
+CODE_TTL_SECONDS = 600
+
+
+def _generate_code() -> str:
+    return "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+
+
+async def _send_add_instructions(target, tg_id: int):
+    code = _generate_code()
+    _pending_codes[code] = {"tg_id": tg_id, "expires": time.time() + CODE_TTL_SECONDS}
+    await target.answer(
+        "Чтобы подключить канал:\n\n"
+        "1. Добавь меня в канал как администратора с правами:\n"
+        "   • Публикация сообщений\n"
+        "   • Редактирование сообщений других пользователей\n"
+        "   • Удаление сообщений\n\n"
+        f"2. Опубликуй в канале сообщение с этим кодом (я сам его удалю):\n\n<code>{code}</code>\n\n"
+        "Код действует 10 минут.",
+    )
 
 
 async def cmd_channels(message: Message):
@@ -24,14 +41,14 @@ async def cmd_channels(message: Message):
     channels = await db.list_channels(user_id)
     if not channels:
         await message.answer("Пока нет подключённых каналов.")
-        await message.answer(ADD_CHANNEL_HINT)
+        await _send_add_instructions(message, message.from_user.id)
         return
     await message.answer("Твои каналы:", reply_markup=channels_menu_keyboard(channels))
 
 
 @router.message(Command("addchannel"))
 async def cmd_addchannel(message: Message):
-    await message.answer(ADD_CHANNEL_HINT)
+    await _send_add_instructions(message, message.from_user.id)
 
 
 @router.message(Command("channels"))
@@ -46,7 +63,7 @@ async def cmd_removechannel(message: Message):
 
 @router.callback_query(F.data == "show_add_channel_hint")
 async def cb_show_add_hint(callback: CallbackQuery):
-    await callback.message.answer(ADD_CHANNEL_HINT)
+    await _send_add_instructions(callback.message, callback.from_user.id)
     await callback.answer()
 
 
@@ -64,9 +81,58 @@ async def cb_remove_channel(callback: CallbackQuery):
     await callback.answer()
 
 
+# ---------- основной способ подключения: код, опубликованный прямо в канале ----------
+# Надёжнее пересылки: если пост в канале сам является репостом из другого канала,
+# forward_origin покажет исходный канал, а не тот, куда добавлен бот — пересылка
+# в таком случае ошибочно ругается на права. Публикация в канал напрямую такой
+# проблемы не имеет: chat.id всегда правильный.
+
+@router.channel_post()
+async def handle_channel_post(message: Message, bot: Bot):
+    raw = (message.text or message.caption or "").strip().upper()
+    entry = _pending_codes.get(raw)
+    if not entry:
+        return
+    if entry["expires"] < time.time():
+        _pending_codes.pop(raw, None)
+        return
+
+    chat = message.chat
+    try:
+        member = await bot.get_chat_member(chat.id, bot.id)
+    except Exception:
+        return  # не удалось проверить — просто игнорируем этот пост
+
+    is_admin = member.status == "administrator"
+    can_post = getattr(member, "can_post_messages", False)
+    can_edit = getattr(member, "can_edit_messages", False)
+    can_delete = getattr(member, "can_delete_messages", False)
+
+    if not (is_admin and can_post and can_delete):
+        return  # прав не хватает — код останется активным, попробует ещё раз после выдачи прав
+
+    _pending_codes.pop(raw, None)
+    tg_id = entry["tg_id"]
+    user_id = await db.get_or_create_user(tg_id)
+    await db.add_channel(user_id, chat.id, chat.title or "Без названия")
+
+    try:
+        await bot.delete_message(chat.id, message.message_id)
+    except Exception:
+        pass  # не критично, если не смогли подчистить сообщение с кодом
+
+    note = "" if can_edit else (
+        "\n⚠️ Нет права «Редактирование сообщений других пользователей» — "
+        "live-правка текста уже опубликованных постов работать не будет."
+    )
+    await bot.send_message(tg_id, f"✅ Канал «{chat.title}» подключён!{note}")
+
+
+# ---------- запасной способ: пересылка сообщения из канала ----------
+# Работает, если пересылаемый пост НЕ является репостом из другого канала.
+
 @router.message(F.forward_origin.as_("origin"))
 async def handle_forwarded(message: Message, origin: MessageOriginChannel, bot: Bot):
-    """Пользователь переслал пост из канала — пытаемся подключить канал."""
     if origin.type != "channel":
         await message.answer("Это не похоже на пересланное сообщение из канала.")
         return
@@ -75,7 +141,17 @@ async def handle_forwarded(message: Message, origin: MessageOriginChannel, bot: 
     try:
         member = await bot.get_chat_member(chat.id, bot.id)
     except Exception as e:
-        await message.answer(f"Не удалось проверить права в канале: {e}")
+        if "not a member" in str(e).lower() or "forbidden" in str(e).lower():
+            await message.answer(
+                "Не вижу себя участником канала «" + (chat.title or "") + "».\n\n"
+                "Если этот пост сам является репостом из другого канала — Telegram "
+                "показывает исходный канал вместо того, куда я добавлен, и пересылка "
+                "тут не сработает в принципе.\n\n"
+                "Используй способ через код: «📢 Мои каналы» → «➕ Добавить канал» — "
+                "надёжнее и не зависит от того, репост это или нет."
+            )
+        else:
+            await message.answer(f"Не удалось проверить права в канале: {e}")
         return
 
     is_admin = member.status == "administrator"
@@ -94,8 +170,7 @@ async def handle_forwarded(message: Message, origin: MessageOriginChannel, bot: 
         await message.answer(
             "⚠️ Канал подключаю, но у меня нет права «Редактирование сообщений других "
             "пользователей» — без него не получится править текст уже опубликованных "
-            "постов через /myposts (публикация и автоудаление при этом будут работать). "
-            "Если нужна и правка текста — выдай это право в настройках канала."
+            "постов через «📋 Мои посты» (публикация и автоудаление при этом будут работать)."
         )
 
     user_id = await db.get_or_create_user(message.from_user.id)

@@ -5,11 +5,12 @@ from datetime import datetime, timedelta
 from aiogram import Router, F, Bot
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InputMediaPhoto, InputMediaVideo
 
 from bot import db
 from bot.tzutil import get_user_tz, get_user_tz_name
 from bot.states import NewPost
+from bot.entities_util import serialize_entities, deserialize_entities
 from bot.keyboards import channels_keyboard, delete_after_keyboard, when_keyboard
 
 router = Router()
@@ -32,18 +33,20 @@ async def _start_post_flow(
     media_type: str,
     file_id: str | None,
     text: str | None,
+    entities_json: str | None = None,
     album_items: list[dict] | None = None,
 ):
     user_id = await db.get_or_create_user(from_user_id)
     channels = await db.list_channels(user_id)
     if not channels:
-        await message.answer("Сначала подключи хотя бы один канал: /addchannel")
+        await message.answer("Сначала подключи хотя бы один канал: «📢 Мои каналы»")
         return
 
     await state.update_data(
         media_type=media_type,
         file_id=file_id,
         text=text,
+        entities_json=entities_json,
         album_items=album_items,
         selected_channels=[],
         user_id=user_id,
@@ -62,7 +65,8 @@ async def receive_single_media(message: Message, state: FSMContext):
     media_type = "photo" if message.photo else "video"
     file_id = message.photo[-1].file_id if message.photo else message.video.file_id
     await _start_post_flow(
-        message, state, message.from_user.id, media_type, file_id, message.html_text
+        message, state, message.from_user.id, media_type, file_id,
+        message.caption, serialize_entities(message.caption_entities),
     )
 
 
@@ -85,14 +89,16 @@ async def _process_album(gid: str, chat_id: int, from_user_id: int, state: FSMCo
     messages.sort(key=lambda m: m.message_id)
 
     items = []
-    caption_html = None
+    caption_text = None
+    caption_entities_json = None
     for m in messages:
         if m.photo:
             items.append({"type": "photo", "file_id": m.photo[-1].file_id})
         elif m.video:
             items.append({"type": "video", "file_id": m.video.file_id})
-        if m.caption and not caption_html:
-            caption_html = m.html_text
+        if m.caption and not caption_text:
+            caption_text = m.caption
+            caption_entities_json = serialize_entities(m.caption_entities)
 
     if not items:
         return
@@ -100,13 +106,14 @@ async def _process_album(gid: str, chat_id: int, from_user_id: int, state: FSMCo
     user_id = await db.get_or_create_user(from_user_id)
     channels = await db.list_channels(user_id)
     if not channels:
-        await bot.send_message(chat_id, "Сначала подключи хотя бы один канал: /addchannel")
+        await bot.send_message(chat_id, "Сначала подключи хотя бы один канал: «📢 Мои каналы»")
         return
 
     await state.update_data(
         media_type="album",
         file_id=None,
-        text=caption_html,
+        text=caption_text,
+        entities_json=caption_entities_json,
         album_items=items,
         selected_channels=[],
         user_id=user_id,
@@ -124,7 +131,8 @@ async def _process_album(gid: str, chat_id: int, from_user_id: int, state: FSMCo
 @router.message(F.text & ~F.text.startswith("/"), StateFilter(None))
 async def receive_text_content(message: Message, state: FSMContext):
     await _start_post_flow(
-        message, state, message.from_user.id, "text", None, message.html_text
+        message, state, message.from_user.id, "text", None,
+        message.text, serialize_entities(message.entities),
     )
 
 
@@ -161,18 +169,49 @@ async def channels_done(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ---------- шаг 3: через сколько удалить ----------
+# ---------- шаг 3: через сколько удалить → показываем предпросмотр ----------
 
 @router.callback_query(NewPost.choosing_delete_after, F.data.startswith("del:"))
 async def choose_delete_after(callback: CallbackQuery, state: FSMContext):
     hours = int(callback.data.split(":")[1]) or None
     await state.update_data(delete_after_hours=hours)
     await state.set_state(NewPost.choosing_time)
-    await callback.message.edit_text(
-        f"Отметка удаления: {_delete_after_label(hours)}.\nКогда публикуем?",
-        reply_markup=when_keyboard(),
-    )
+
+    await callback.message.edit_text(f"Отметка удаления: {_delete_after_label(hours)}.")
+    data = await state.get_data()
+    await _send_preview(callback.message, data)
     await callback.answer()
+
+
+async def _send_preview(message: Message, data: dict):
+    """Показываем пост так, как он реально будет выглядеть, и вешаем кнопки
+    'когда публикуем' прямо под предпросмотром."""
+    media_type = data["media_type"]
+    text = data.get("text")
+    entities = deserialize_entities(data.get("entities_json"))
+
+    if media_type == "photo":
+        await message.answer_photo(
+            data["file_id"], caption=text, caption_entities=entities, reply_markup=when_keyboard()
+        )
+    elif media_type == "video":
+        await message.answer_video(
+            data["file_id"], caption=text, caption_entities=entities, reply_markup=when_keyboard()
+        )
+    elif media_type == "album":
+        items = data.get("album_items") or []
+        media = []
+        for i, item in enumerate(items):
+            cls = InputMediaPhoto if item["type"] == "photo" else InputMediaVideo
+            kwargs = {}
+            if i == 0 and text:
+                kwargs["caption"] = text
+                kwargs["caption_entities"] = entities
+            media.append(cls(media=item["file_id"], **kwargs))
+        await message.answer_media_group(media)
+        await message.answer("👆 Так будет выглядеть альбом. Когда публикуем?", reply_markup=when_keyboard())
+    else:
+        await message.answer(text or "(пусто)", entities=entities, reply_markup=when_keyboard())
 
 
 # ---------- шаг 4: когда публиковать ----------
@@ -185,7 +224,7 @@ async def choose_when(callback: CallbackQuery, state: FSMContext, bot: Bot):
     if choice == "custom":
         tz_name = await get_user_tz_name(data["user_id"])
         await state.set_state(NewPost.waiting_custom_time)
-        await callback.message.edit_text(
+        await callback.message.answer(
             "Напиши дату и время публикации в формате:\n"
             "<code>31.12.2026 15:30</code>\n\n"
             f"Часовой пояс: {tz_name} (поменять — в ⚙️ Настройках)",
@@ -227,7 +266,10 @@ async def custom_time_entered(message: Message, state: FSMContext, bot: Bot):
 
 async def _finalize(message: Message, state: FSMContext, bot: Bot, publish_at: datetime, tz):
     data = await state.get_data()
-    post_id = await db.create_post(data["user_id"], data.get("text"), data["media_type"], data.get("file_id"))
+    post_id = await db.create_post(
+        data["user_id"], data.get("text"), data["media_type"], data.get("file_id"),
+        data.get("entities_json"),
+    )
 
     if data["media_type"] == "album" and data.get("album_items"):
         await db.add_album_items(post_id, data["album_items"])
@@ -247,20 +289,9 @@ async def _finalize(message: Message, state: FSMContext, bot: Bot, publish_at: d
         f"Каналы: {', '.join(names)}\n"
         f"Публикация: {when_str}\n"
         f"Удаление: {_delete_after_label(data.get('delete_after_hours'))}\n\n"
-        "Бот проверяет расписание регулярно, публикация появится в течение "
-        "пары десятков секунд после назначенного времени.\n\n"
         "Изменить текст поста позже можно в разделе «📋 Мои посты»"
     )
-
-    if isinstance(message, Message) and message.text is None and message.caption is None:
-        # это может быть message без возможности edit_text (на всякий случай)
-        await message.answer(text)
-    else:
-        try:
-            await message.edit_text(text)
-        except Exception:
-            await message.answer(text)
-
+    await message.answer(text)
     await state.clear()
 
 

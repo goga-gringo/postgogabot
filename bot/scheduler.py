@@ -6,19 +6,21 @@ from aiogram.types import InputMediaPhoto, InputMediaVideo
 
 from bot import db
 from bot.config import POLL_INTERVAL_SECONDS
+from bot.entities_util import deserialize_entities
 
 logger = logging.getLogger(__name__)
 
 
 async def _publish_one(bot: Bot, row):
     chat_id = row["chat_id"]
+    entities = deserialize_entities(row["entities_json"])
     try:
         if row["media_type"] == "photo":
-            msg = await bot.send_photo(chat_id, row["file_id"], caption=row["text"], parse_mode="HTML")
+            msg = await bot.send_photo(chat_id, row["file_id"], caption=row["text"], caption_entities=entities)
             message_ids = [msg.message_id]
 
         elif row["media_type"] == "video":
-            msg = await bot.send_video(chat_id, row["file_id"], caption=row["text"], parse_mode="HTML")
+            msg = await bot.send_video(chat_id, row["file_id"], caption=row["text"], caption_entities=entities)
             message_ids = [msg.message_id]
 
         elif row["media_type"] == "album":
@@ -29,13 +31,13 @@ async def _publish_one(bot: Bot, row):
                 kwargs = {}
                 if i == 0 and row["text"]:
                     kwargs["caption"] = row["text"]
-                    kwargs["parse_mode"] = "HTML"
+                    kwargs["caption_entities"] = entities
                 media.append(cls(media=item["file_id"], **kwargs))
             msgs = await bot.send_media_group(chat_id, media)
             message_ids = [m.message_id for m in msgs]
 
         else:  # text
-            msg = await bot.send_message(chat_id, row["text"], parse_mode="HTML")
+            msg = await bot.send_message(chat_id, row["text"], entities=entities)
             message_ids = [msg.message_id]
 
         await db.mark_published(row["target_id"], message_ids, row["delete_after_hours"])

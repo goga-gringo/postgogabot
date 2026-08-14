@@ -1,6 +1,5 @@
 import html as html_lib
 import logging
-import re
 
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
@@ -10,18 +9,16 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot import db
 from bot.states import EditPost
+from bot.entities_util import serialize_entities, deserialize_entities
 
 router = Router()
 logger = logging.getLogger(__name__)
 
-_TAG_RE = re.compile(r"<[^>]+>")
 
-
-def _plain_preview(html_text: str | None, length: int = 40) -> str:
-    if not html_text:
+def _plain_preview(text: str | None, length: int = 40) -> str:
+    if not text:
         return "(без текста)"
-    plain = _TAG_RE.sub("", html_text).strip()
-    plain = plain or "(медиа без подписи)"
+    plain = text.strip() or "(медиа без подписи)"
     return plain[:length] + ("…" if len(plain) > length else "")
 
 
@@ -55,7 +52,7 @@ async def show_post(callback: CallbackQuery):
     lines = [
         f"<b>Пост #{post_id}</b> ({html_lib.escape(post['media_type'] or '')})",
         "",
-        post["text"] or "<i>(без текста)</i>",
+        html_lib.escape(post["text"]) if post["text"] else "<i>(без текста)</i>",
         "",
         "<b>Каналы:</b>",
     ]
@@ -89,7 +86,7 @@ async def ask_new_text(callback: CallbackQuery, state: FSMContext):
         else "Это текстовый пост целиком."
     )
     await callback.message.edit_text(
-        f"Пришли новый текст поста (форматирование и premium-эмодзи сохранятся).\n{hint}\n\n/cancel — отменить"
+        f"Пришли новый текст поста (форматирование сохранится).\n{hint}\n\n/cancel — отменить"
     )
     await callback.answer()
 
@@ -98,9 +95,11 @@ async def ask_new_text(callback: CallbackQuery, state: FSMContext):
 async def apply_new_text(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     post_id = data["edit_post_id"]
-    new_html = message.html_text
+    new_text = message.text
+    entities_json = serialize_entities(message.entities)
+    entities = deserialize_entities(entities_json)
 
-    await db.update_post_text(post_id, new_html)
+    await db.update_post_text(post_id, new_text, entities_json)
     post = await db.get_post(post_id)
     targets = await db.get_targets_for_post(post_id)
 
@@ -111,10 +110,10 @@ async def apply_new_text(message: Message, state: FSMContext, bot: Bot):
         first_id = t["message_ids"][0]
         try:
             if post["media_type"] == "text":
-                await bot.edit_message_text(new_html, chat_id=t["chat_id"], message_id=first_id, parse_mode="HTML")
+                await bot.edit_message_text(new_text, chat_id=t["chat_id"], message_id=first_id, entities=entities)
             else:
                 await bot.edit_message_caption(
-                    chat_id=t["chat_id"], message_id=first_id, caption=new_html, parse_mode="HTML"
+                    chat_id=t["chat_id"], message_id=first_id, caption=new_text, caption_entities=entities
                 )
             updated += 1
         except Exception as e:

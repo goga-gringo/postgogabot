@@ -19,8 +19,9 @@ CREATE TABLE IF NOT EXISTS channels (
     UNIQUE(owner_id, chat_id)
 );
 
--- Черновик/контент поста. text хранится как HTML (aiogram html_text) —
--- так сохраняются форматирование и premium-эмодзи (<tg-emoji emoji-id="...">)
+-- Черновик/контент поста. text — обычный текст (без HTML), форматирование
+-- и custom-эмодзи хранятся отдельно как сырые entities (entities_json) —
+-- так надёжнее, чем HTML-разметка, и меньше риск, что Telegram что-то не так распарсит.
 CREATE TABLE IF NOT EXISTS posts (
     id BIGSERIAL PRIMARY KEY,
     owner_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -29,6 +30,8 @@ CREATE TABLE IF NOT EXISTS posts (
     file_id TEXT,            -- используется для photo/video; для album — NULL
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS entities_json TEXT;
 
 -- Элементы альбома (media_type = 'album'), по порядку
 CREATE TABLE IF NOT EXISTS post_media (

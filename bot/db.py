@@ -89,15 +89,18 @@ async def remove_channel(owner_id: int, channel_id: int):
 
 # ---------- posts ----------
 
-async def create_post(owner_id: int, text: str | None, media_type: str | None, file_id: str | None) -> int:
+async def create_post(
+    owner_id: int, text: str | None, media_type: str | None, file_id: str | None,
+    entities_json: str | None = None,
+) -> int:
     async with pool().acquire() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO posts (owner_id, text, media_type, file_id)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO posts (owner_id, text, media_type, file_id, entities_json)
+            VALUES ($1, $2, $3, $4, $5)
             RETURNING id
             """,
-            owner_id, text, media_type, file_id,
+            owner_id, text, media_type, file_id, entities_json,
         )
         return row["id"]
 
@@ -107,9 +110,12 @@ async def get_post(post_id: int):
         return await conn.fetchrow("SELECT * FROM posts WHERE id = $1", post_id)
 
 
-async def update_post_text(post_id: int, text: str | None):
+async def update_post_text(post_id: int, text: str | None, entities_json: str | None = None):
     async with pool().acquire() as conn:
-        await conn.execute("UPDATE posts SET text = $2 WHERE id = $1", post_id, text)
+        await conn.execute(
+            "UPDATE posts SET text = $2, entities_json = $3 WHERE id = $1",
+            post_id, text, entities_json,
+        )
 
 
 async def list_user_posts(owner_id: int, limit: int = 15):
@@ -174,7 +180,7 @@ async def fetch_due_to_publish():
         return await conn.fetch(
             """
             SELECT pt.id AS target_id, pt.post_id, pt.channel_id, pt.delete_after_hours,
-                   p.text, p.media_type, p.file_id,
+                   p.text, p.media_type, p.file_id, p.entities_json,
                    c.chat_id
             FROM post_targets pt
             JOIN posts p ON p.id = pt.post_id
