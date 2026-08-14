@@ -23,7 +23,9 @@ async def _publish_via_copy(bot: Bot, row) -> list[int] | None:
             results = await bot.copy_messages(row["chat_id"], row["source_chat_id"], row["source_message_ids"])
             return [r.message_id for r in results]
         else:
-            result = await bot.copy_message(row["chat_id"], row["source_chat_id"], row["source_message_ids"][0])
+            result = await bot.copy_message(
+                row["chat_id"], row["source_chat_id"], row["source_message_ids"][0], parse_mode=None
+            )
             return [result.message_id]
     except Exception as e:
         logger.warning("copy_message failed for target %s, falling back to reconstruct: %s", row["target_id"], e)
@@ -37,11 +39,15 @@ async def _publish_via_reconstruct(bot: Bot, row) -> list[int]:
     entities = deserialize_entities(row["entities_json"])
 
     if row["media_type"] == "photo":
-        msg = await bot.send_photo(chat_id, row["file_id"], caption=row["text"], caption_entities=entities)
+        msg = await bot.send_photo(
+            chat_id, row["file_id"], caption=row["text"], caption_entities=entities, parse_mode=None
+        )
         return [msg.message_id]
 
     if row["media_type"] == "video":
-        msg = await bot.send_video(chat_id, row["file_id"], caption=row["text"], caption_entities=entities)
+        msg = await bot.send_video(
+            chat_id, row["file_id"], caption=row["text"], caption_entities=entities, parse_mode=None
+        )
         return [msg.message_id]
 
     if row["media_type"] == "album":
@@ -53,11 +59,12 @@ async def _publish_via_reconstruct(bot: Bot, row) -> list[int]:
             if i == 0 and row["text"]:
                 kwargs["caption"] = row["text"]
                 kwargs["caption_entities"] = entities
+                kwargs["parse_mode"] = None
             media.append(cls(media=item["file_id"], **kwargs))
         msgs = await bot.send_media_group(chat_id, media)
         return [m.message_id for m in msgs]
 
-    msg = await bot.send_message(chat_id, row["text"], entities=entities)
+    msg = await bot.send_message(chat_id, row["text"], entities=entities, parse_mode=None)
     return [msg.message_id]
 
 

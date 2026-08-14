@@ -58,7 +58,10 @@ async def show_post(callback: CallbackQuery):
     ]
     status_ru = {"scheduled": "запланирован", "published": "опубликован", "deleted": "удалён", "failed": "ошибка"}
     for t in targets:
-        lines.append(f"• {html_lib.escape(t['title'])} — {status_ru.get(t['status'], t['status'])}")
+        line = f"• {html_lib.escape(t['title'])} — {status_ru.get(t['status'], t['status'])}"
+        if t["status"] == "failed" and t["error"]:
+            line += f"\n   <code>{html_lib.escape(t['error'][:200])}</code>"
+        lines.append(line)
 
     b = InlineKeyboardBuilder()
     b.button(text="✏️ Изменить текст", callback_data=f"edittext:{post_id}")
@@ -105,27 +108,32 @@ async def apply_new_text(message: Message, state: FSMContext, bot: Bot):
     targets = await db.get_targets_for_post(post_id)
 
     updated, failed = 0, 0
+    errors = []
     for t in targets:
         if t["status"] != "published" or not t["message_ids"]:
             continue
         first_id = t["message_ids"][0]
         try:
             if post["media_type"] == "text":
-                await bot.edit_message_text(new_text, chat_id=t["chat_id"], message_id=first_id, entities=entities)
+                await bot.edit_message_text(
+                    new_text, chat_id=t["chat_id"], message_id=first_id, entities=entities, parse_mode=None
+                )
             else:
                 await bot.edit_message_caption(
-                    chat_id=t["chat_id"], message_id=first_id, caption=new_text, caption_entities=entities
+                    chat_id=t["chat_id"], message_id=first_id, caption=new_text,
+                    caption_entities=entities, parse_mode=None,
                 )
             updated += 1
         except Exception as e:
             logger.warning("Live edit failed for target %s: %s", t["target_id"], e)
+            errors.append(f"{t['title']}: {e}")
             failed += 1
 
     await state.clear()
 
-    reply = f"✅ Текст обновлён.\nУже опубликованные посты обновлены: {updated}."
+    reply = f"✅ Текст в базе обновлён.\nУже опубликованные посты обновлены: {updated}."
     if failed:
-        reply += f"\n⚠️ Не удалось обновить {failed} шт. (например, сообщение уже удалено вручную)."
+        reply += f"\n⚠️ Не удалось обновить {failed} шт.:\n" + "\n".join(errors[:5])
     reply += "\n\nЗапланированные, ещё не опубликованные посты выйдут уже с новым текстом."
     await message.answer(reply)
 
@@ -142,7 +150,7 @@ async def ask_delete_scope(callback: CallbackQuery):
         return
 
     targets = await db.get_targets_for_post(post_id)
-    active = [t for t in targets if t["status"] in ("scheduled", "published")]
+    active = [t for t in targets if t["status"] != "deleted"]
     if not active:
         await callback.answer("Пост уже нигде не активен.", show_alert=True)
         return
@@ -171,7 +179,7 @@ async def delete_all(callback: CallbackQuery):
         return
 
     targets = await db.get_targets_for_post(post_id)
-    ids = [t["target_id"] for t in targets if t["status"] in ("scheduled", "published")]
+    ids = [t["target_id"] for t in targets if t["status"] != "deleted"]
     await _delete_targets(callback, post_id, ids)
 
 

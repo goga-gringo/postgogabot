@@ -199,7 +199,7 @@ async def mark_published(target_id: int, message_ids: list[int], delete_after_ho
                 """
                 UPDATE post_targets
                 SET status = 'published', message_ids = $2::bigint[], published_at = now(),
-                    delete_at = now() + ($3 || ' hours')::interval
+                    delete_at = now() + ($3 * INTERVAL '1 hour')
                 WHERE id = $1
                 """,
                 target_id, message_ids, delete_after_hours,
@@ -249,7 +249,7 @@ async def get_targets_for_post(post_id: int):
     async with pool().acquire() as conn:
         return await conn.fetch(
             """
-            SELECT pt.id AS target_id, pt.status, pt.message_ids, c.chat_id, c.title
+            SELECT pt.id AS target_id, pt.status, pt.message_ids, pt.error, c.chat_id, c.title
             FROM post_targets pt
             JOIN channels c ON c.id = pt.channel_id
             WHERE pt.post_id = $1

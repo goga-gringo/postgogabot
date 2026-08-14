@@ -194,11 +194,11 @@ async def _send_preview(message: Message, data: dict):
 
     if media_type == "photo":
         await message.answer_photo(
-            data["file_id"], caption=text, caption_entities=entities, reply_markup=when_keyboard()
+            data["file_id"], caption=text, caption_entities=entities, parse_mode=None, reply_markup=when_keyboard()
         )
     elif media_type == "video":
         await message.answer_video(
-            data["file_id"], caption=text, caption_entities=entities, reply_markup=when_keyboard()
+            data["file_id"], caption=text, caption_entities=entities, parse_mode=None, reply_markup=when_keyboard()
         )
     elif media_type == "album":
         items = data.get("album_items") or []
@@ -209,11 +209,12 @@ async def _send_preview(message: Message, data: dict):
             if i == 0 and text:
                 kwargs["caption"] = text
                 kwargs["caption_entities"] = entities
+                kwargs["parse_mode"] = None
             media.append(cls(media=item["file_id"], **kwargs))
         await message.answer_media_group(media)
         await message.answer("👆 Так будет выглядеть альбом. Когда публикуем?", reply_markup=when_keyboard())
     else:
-        await message.answer(text or "(пусто)", entities=entities, reply_markup=when_keyboard())
+        await message.answer(text or "(пусто)", entities=entities, parse_mode=None, reply_markup=when_keyboard())
 
 
 # ---------- шаг: когда публиковать ----------
