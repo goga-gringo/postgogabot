@@ -11,6 +11,7 @@ from bot import db
 from bot import ui
 from bot.states import EditPost
 from bot.entities_util import serialize_entities, deserialize_entities
+from bot.keyboards import HOME_BUTTON
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ async def cmd_myposts(message: Message):
         status = f"{p['published_count']}/{p['targets_count']} опубл."
         b.button(text=f"#{p['id']} [{p['media_type']}] {preview} — {status}", callback_data=f"editpost:{p['id']}")
     b.adjust(1)
+    b.row(HOME_BUTTON)
     sent = await message.answer("Твои последние посты:", reply_markup=b.as_markup())
     await ui.track(user_id, sent)
 
@@ -54,7 +56,9 @@ async def show_post(callback: CallbackQuery):
 
     targets = await db.get_targets_for_post(post_id)
     if all(t["status"] == "deleted" for t in targets):
-        await callback.message.edit_text(f"Пост #{post_id} удалён отовсюду.")
+        b = InlineKeyboardBuilder()
+        b.row(HOME_BUTTON)
+        await callback.message.edit_text(f"Пост #{post_id} удалён отовсюду.", reply_markup=b.as_markup())
         await callback.answer()
         return
 
@@ -76,6 +80,7 @@ async def show_post(callback: CallbackQuery):
     b.button(text="✏️ Изменить текст", callback_data=f"edittext:{post_id}")
     b.button(text="🗑 Удалить пост", callback_data=f"delpost:{post_id}")
     b.adjust(1)
+    b.row(HOME_BUTTON)
 
     await callback.message.edit_text("\n".join(lines), reply_markup=b.as_markup(), parse_mode="HTML")
     await callback.answer()
@@ -98,8 +103,11 @@ async def ask_new_text(callback: CallbackQuery, state: FSMContext):
         if post["media_type"] in ("photo", "video", "album")
         else "Это текстовый пост целиком."
     )
+    b = InlineKeyboardBuilder()
+    b.row(HOME_BUTTON)
     await callback.message.edit_text(
-        f"Пришли новый текст поста (форматирование сохранится).\n{hint}\n\n/cancel — отменить"
+        f"Пришли новый текст поста (форматирование сохранится).\n{hint}\n\n/cancel — отменить",
+        reply_markup=b.as_markup(),
     )
     await callback.answer()
 
@@ -177,6 +185,7 @@ async def ask_delete_scope(callback: CallbackQuery):
         b.button(text=f"📍 Только «{t['title']}»", callback_data=f"delone:{post_id}:{t['target_id']}")
     b.button(text="⬅️ Назад", callback_data=f"editpost:{post_id}")
     b.adjust(1)
+    b.row(HOME_BUTTON)
     await callback.message.edit_text("Где удалить пост?", reply_markup=b.as_markup())
     await callback.answer()
 
@@ -226,5 +235,7 @@ async def _delete_targets(callback: CallbackQuery, post_id: int, target_ids: lis
         await db.mark_deleted(tid)
         removed += 1
 
-    await callback.message.edit_text(f"🗑 Удалено: {removed} шт.")
+    b = InlineKeyboardBuilder()
+    b.row(HOME_BUTTON)
+    await callback.message.edit_text(f"🗑 Удалено: {removed} шт.", reply_markup=b.as_markup())
     await callback.answer()

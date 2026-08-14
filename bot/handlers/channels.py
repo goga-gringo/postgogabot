@@ -5,10 +5,11 @@ import time
 from aiogram import Router, F, Bot
 from aiogram.filters import Command, StateFilter
 from aiogram.types import Message, CallbackQuery, MessageOriginChannel
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot import db
 from bot import ui
-from bot.keyboards import channels_menu_keyboard
+from bot.keyboards import channels_menu_keyboard, HOME_BUTTON
 
 router = Router()
 
@@ -27,6 +28,8 @@ async def _send_add_instructions(target, tg_id: int, prefix: str = ""):
     _pending_codes[code] = {"tg_id": tg_id, "expires": time.time() + CODE_TTL_SECONDS}
     user_id = await db.get_or_create_user(tg_id)
     await ui.clear_previous(target.bot, target.chat.id, user_id)
+    b = InlineKeyboardBuilder()
+    b.row(HOME_BUTTON)
     sent = await target.answer(
         prefix +
         "Чтобы подключить канал:\n\n"
@@ -36,6 +39,7 @@ async def _send_add_instructions(target, tg_id: int, prefix: str = ""):
         "   • Удаление сообщений\n\n"
         f"2. Опубликуй в канале сообщение с этим кодом (я сам его удалю):\n\n<code>{code}</code>\n\n"
         "Код действует 10 минут.",
+        reply_markup=b.as_markup(),
     )
     await ui.track(user_id, sent)
 

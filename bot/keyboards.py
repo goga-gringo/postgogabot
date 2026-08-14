@@ -6,6 +6,8 @@ MENU_CHANNELS = "📢 Мои каналы"
 MENU_POSTS = "📋 Мои посты"
 MENU_SETTINGS = "⚙️ Настройки"
 
+HOME_BUTTON = InlineKeyboardButton(text="🏠 Главное меню", callback_data="go_home")
+
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     """Постоянное меню внизу экрана — разделы, а не настройки конкретного поста."""
@@ -49,6 +51,7 @@ def delete_after_keyboard(default_hours: int | None = None) -> InlineKeyboardMar
     never_star = "⭐" if not default_hours else ""
     b.button(text=f"{never_star}Не удалять", callback_data="del:0")
     b.adjust(4, 4, 1)
+    b.row(InlineKeyboardButton(text="✖️ Отмена", callback_data="cancel"))
     return b.as_markup()
 
 
@@ -68,12 +71,14 @@ def preview_keyboard(link_button_rows=None, allow_link_buttons: bool = True) -> 
         label = "🔗 Изменить кнопки-ссылки" if link_button_rows else "🔗 Добавить кнопку-ссылку"
         b.row(InlineKeyboardButton(text=label, callback_data="add_link_buttons"))
 
+    b.row(InlineKeyboardButton(text="✖️ Отмена", callback_data="cancel"))
     return b.as_markup()
 
 
 def back_only_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="🔙 Назад", callback_data="preview_back")
+    b.row(InlineKeyboardButton(text="🔙 Назад", callback_data="preview_back"))
+    b.row(HOME_BUTTON)
     return b.as_markup()
 
 
@@ -88,12 +93,13 @@ def link_buttons_only_markup(rows) -> InlineKeyboardMarkup | None:
 
 
 def channels_menu_keyboard(channels) -> InlineKeyboardMarkup:
-    """Экран 'Мои каналы': список с удалением + кнопка добавить."""
+    """Экран 'Мои каналы': список с удалением + кнопка добавить + выход в меню."""
     b = InlineKeyboardBuilder()
     for ch in channels:
         b.button(text=f"❌ {ch['title']}", callback_data=f"rmch:{ch['id']}")
     b.button(text="➕ Добавить канал", callback_data="show_add_channel_hint")
     b.adjust(1)
+    b.row(HOME_BUTTON)
     return b.as_markup()
 
 
@@ -112,5 +118,6 @@ def settings_keyboard(current_tz: str, current_default_hours: int | None) -> Inl
     never_mark = "✅ " if not current_default_hours else "◻️ "
     b.button(text=f"{never_mark}По умолчанию: не удалять", callback_data="defdel:0")
     b.adjust(1)
+    b.row(HOME_BUTTON)
 
     return b.as_markup()

@@ -572,11 +572,3 @@ async def _finalize(message: Message, state: FSMContext, bot: Bot, publish_at: d
     await ui.track(data["user_id"], sent)
     await state.clear()
 
-
-# ---------- отмена на любом шаге ----------
-
-@router.callback_query(F.data == "cancel")
-async def cancel_flow(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.edit_text("Отменено.")
-    await callback.answer()

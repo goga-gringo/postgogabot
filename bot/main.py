@@ -8,7 +8,7 @@ from aiogram.enums import ParseMode
 from bot.config import BOT_TOKEN
 from bot import db
 from bot.scheduler import publisher_loop, cleaner_loop
-from bot.handlers import start, channels, edit, menu, posts
+from bot.handlers import start, common, channels, edit, menu, posts
 
 logging.basicConfig(level=logging.INFO)
 
@@ -20,6 +20,7 @@ async def main():
     dp = Dispatcher()
 
     dp.include_router(start.router)
+    dp.include_router(common.router)
     dp.include_router(channels.router)
     dp.include_router(edit.router)
     dp.include_router(menu.router)
