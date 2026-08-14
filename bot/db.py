@@ -100,15 +100,17 @@ async def create_post(
     owner_id: int, text: str | None, media_type: str | None, file_id: str | None,
     entities_json: str | None = None,
     source_chat_id: int | None = None, source_message_ids: list[int] | None = None,
+    button_json: str | None = None,
 ) -> int:
     async with pool().acquire() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO posts (owner_id, text, media_type, file_id, entities_json, source_chat_id, source_message_ids)
-            VALUES ($1, $2, $3, $4, $5, $6, $7::bigint[])
+            INSERT INTO posts (owner_id, text, media_type, file_id, entities_json,
+                                source_chat_id, source_message_ids, button_json)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::bigint[], $8)
             RETURNING id
             """,
-            owner_id, text, media_type, file_id, entities_json, source_chat_id, source_message_ids,
+            owner_id, text, media_type, file_id, entities_json, source_chat_id, source_message_ids, button_json,
         )
         return row["id"]
 
@@ -190,7 +192,7 @@ async def fetch_due_to_publish():
         return await conn.fetch(
             """
             SELECT pt.id AS target_id, pt.post_id, pt.channel_id, pt.delete_after_hours,
-                   p.text, p.media_type, p.file_id, p.entities_json,
+                   p.text, p.media_type, p.file_id, p.entities_json, p.button_json,
                    p.source_chat_id, p.source_message_ids, p.text_edited,
                    c.chat_id
             FROM post_targets pt

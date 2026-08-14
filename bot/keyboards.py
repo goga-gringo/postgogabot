@@ -1,5 +1,5 @@
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 
 MENU_CREATE = "📝 Создать пост"
 MENU_CHANNELS = "📢 Мои каналы"
@@ -20,14 +20,21 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
 
 
 def channels_keyboard(channels, selected: set[int]) -> InlineKeyboardMarkup:
-    """Выбор каналов при создании поста (toggle-галочки)."""
+    """Выбор каналов при создании поста (toggle-галочки + 'во все')."""
     b = InlineKeyboardBuilder()
     for ch in channels:
         mark = "✅ " if ch["id"] in selected else "◻️ "
         b.button(text=f"{mark}{ch['title']}", callback_data=f"ch:{ch['id']}")
-    b.button(text="➡️ Далее", callback_data="channels_done")
-    b.button(text="✖️ Отмена", callback_data="cancel")
     b.adjust(1)
+
+    all_ids = {ch["id"] for ch in channels}
+    if channels and selected == all_ids:
+        b.row(InlineKeyboardButton(text="🚫 Снять со всех", callback_data="toggle_all"))
+    else:
+        b.row(InlineKeyboardButton(text="✅ Во все", callback_data="toggle_all"))
+
+    b.row(InlineKeyboardButton(text="➡️ Далее", callback_data="channels_done"))
+    b.row(InlineKeyboardButton(text="✖️ Отмена", callback_data="cancel"))
     return b.as_markup()
 
 
@@ -45,13 +52,38 @@ def delete_after_keyboard(default_hours: int | None = None) -> InlineKeyboardMar
     return b.as_markup()
 
 
-def when_keyboard() -> InlineKeyboardMarkup:
+def preview_keyboard(link_button_rows=None, allow_link_buttons: bool = True) -> InlineKeyboardMarkup:
+    """Клавиатура под предпросмотром: сверху кнопки-ссылки (если есть),
+    снизу управление ботом (когда публиковать / добавить кнопки)."""
     b = InlineKeyboardBuilder()
-    b.button(text="🚀 Опубликовать сейчас", callback_data="when:now")
-    b.button(text="🕐 Через 1 час", callback_data="when:1h")
-    b.button(text="🕒 Через 3 часа", callback_data="when:3h")
-    b.button(text="📅 Указать время вручную", callback_data="when:custom")
-    b.adjust(1)
+    for row in (link_button_rows or []):
+        b.row(*[InlineKeyboardButton(text=btn["text"], url=btn["url"]) for btn in row])
+
+    b.row(InlineKeyboardButton(text="🚀 Опубликовать сейчас", callback_data="when:now"))
+    b.row(InlineKeyboardButton(text="🕐 Через 1 час", callback_data="when:1h"))
+    b.row(InlineKeyboardButton(text="🕒 Через 3 часа", callback_data="when:3h"))
+    b.row(InlineKeyboardButton(text="📅 Указать время вручную", callback_data="when:custom"))
+
+    if allow_link_buttons:
+        label = "🔗 Изменить кнопки-ссылки" if link_button_rows else "🔗 Добавить кнопку-ссылку"
+        b.row(InlineKeyboardButton(text=label, callback_data="add_link_buttons"))
+
+    return b.as_markup()
+
+
+def back_only_keyboard() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="🔙 Назад", callback_data="preview_back")
+    return b.as_markup()
+
+
+def link_buttons_only_markup(rows) -> InlineKeyboardMarkup | None:
+    """Кнопки для РЕАЛЬНОГО опубликованного поста — без служебных when:*."""
+    if not rows:
+        return None
+    b = InlineKeyboardBuilder()
+    for row in rows:
+        b.row(*[InlineKeyboardButton(text=btn["text"], url=btn["url"]) for btn in row])
     return b.as_markup()
 
 

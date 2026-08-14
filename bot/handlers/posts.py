@@ -1,4 +1,6 @@
 import asyncio
+import html
+import json
 import logging
 from datetime import datetime, timedelta
 
@@ -8,11 +10,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InputMediaPhoto, InputMediaVideo
 
 from bot import db
+from bot import ui
 from bot.tzutil import get_user_tz, get_user_tz_name
 from bot.states import NewPost
 from bot.entities_util import serialize_entities, deserialize_entities
-from bot.keyboards import channels_keyboard, delete_after_keyboard, when_keyboard
-from bot import ui
+from bot.keyboards import channels_keyboard, delete_after_keyboard, preview_keyboard, back_only_keyboard
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -25,6 +27,36 @@ _album_buffers: dict[str, list[Message]] = {}
 
 def _delete_after_label(hours: int | None) -> str:
     return "не удалять" if not hours else f"удалить через {hours}ч"
+
+
+def parse_link_buttons(text: str):
+    """'Текст - ссылка' построчно, несколько кнопок в строке через '|'.
+    Если ссылка без схемы (например t.me/...) — подставляем https:// сама.
+    Возвращает (rows, None) при успехе или (None, offending_part) при ошибке."""
+    rows = []
+    for line in (text or "").strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        row = []
+        for part in line.split("|"):
+            part = part.strip()
+            if " - " not in part:
+                return None, part
+            label, url = part.split(" - ", 1)
+            label, url = label.strip(), url.strip()
+            if not label or not url:
+                return None, part
+            if not (url.startswith("http://") or url.startswith("https://") or url.startswith("tg://")):
+                if " " in url or "." not in url:
+                    return None, part
+                url = "https://" + url
+            row.append({"text": label, "url": url})
+        if row:
+            rows.append(row)
+    if not rows:
+        return None, None
+    return rows, None
 
 
 # ---------- запуск сценария: сначала выбор каналов ----------
@@ -62,6 +94,18 @@ async def toggle_channel(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.callback_query(NewPost.choosing_channels, F.data == "toggle_all")
+async def toggle_all_channels(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    channels = await db.list_channels(data["user_id"])
+    all_ids = {c["id"] for c in channels}
+    selected = set(data.get("selected_channels", []))
+    selected = set() if selected == all_ids else set(all_ids)
+    await state.update_data(selected_channels=list(selected))
+    await callback.message.edit_reply_markup(reply_markup=channels_keyboard(channels, selected))
+    await callback.answer()
+
+
 @router.callback_query(NewPost.choosing_channels, F.data == "channels_done")
 async def channels_done(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -90,6 +134,7 @@ async def receive_single_media(message: Message, state: FSMContext):
         album_items=None,
         source_chat_id=message.chat.id,
         source_message_ids=[message.message_id],
+        link_buttons=None,
     )
     await _go_to_delete_after(message, state)
 
@@ -133,6 +178,7 @@ async def _process_album(gid: str, state: FSMContext, bot: Bot):
         album_items=items,
         source_chat_id=messages[0].chat.id,
         source_message_ids=[m.message_id for m in messages],
+        link_buttons=None,
     )
     await bot.send_message(messages[0].chat.id, f"Альбом из {len(items)} медиафайлов принят.")
     await _go_to_delete_after(messages[0], state)
@@ -148,6 +194,7 @@ async def receive_text_content(message: Message, state: FSMContext):
         album_items=None,
         source_chat_id=message.chat.id,
         source_message_ids=[message.message_id],
+        link_buttons=None,
     )
     await _go_to_delete_after(message, state)
 
@@ -189,25 +236,30 @@ async def choose_delete_after(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     user_id = data["user_id"]
     await ui.clear_previous(callback.bot, callback.message.chat.id, user_id)
-    await _send_preview(callback.message, data, _delete_after_label(hours))
+    await _send_preview(callback.message, data, state)
     await callback.answer()
 
 
-async def _send_preview(message: Message, data: dict, delete_label: str):
-    """Показываем пост так, как он реально будет выглядеть, и вешаем кнопки
-    'когда публикуем' прямо под предпросмотром."""
+async def _send_preview(message: Message, data: dict, state: FSMContext):
+    """Показываем пост так, как он реально будет выглядеть, вешаем кнопки
+    'когда публикуем' + опционально кнопки-ссылки. Запоминаем id этого
+    сообщения, чтобы потом можно было менять его клавиатуру на месте
+    (не плодя новые сообщения при 'указать время вручную' / 'назад')."""
     user_id = data["user_id"]
     media_type = data["media_type"]
     text = data.get("text")
     entities = deserialize_entities(data.get("entities_json"))
+    link_buttons = data.get("link_buttons")
+    allow_link_buttons = media_type != "album"  # Telegram не поддерживает reply_markup в альбомах
+    kb = preview_keyboard(link_buttons, allow_link_buttons)
 
     if media_type == "photo":
         sent = await message.answer_photo(
-            data["file_id"], caption=text, caption_entities=entities, parse_mode=None, reply_markup=when_keyboard()
+            data["file_id"], caption=text, caption_entities=entities, parse_mode=None, reply_markup=kb
         )
     elif media_type == "video":
         sent = await message.answer_video(
-            data["file_id"], caption=text, caption_entities=entities, parse_mode=None, reply_markup=when_keyboard()
+            data["file_id"], caption=text, caption_entities=entities, parse_mode=None, reply_markup=kb
         )
     elif media_type == "album":
         items = data.get("album_items") or []
@@ -222,13 +274,92 @@ async def _send_preview(message: Message, data: dict, delete_label: str):
             media.append(cls(media=item["file_id"], **kwargs))
         await message.answer_media_group(media)
         sent = await message.answer(
-            f"👆 Так будет выглядеть альбом.\nОтметка удаления: {delete_label}\n\nКогда публикуем?",
-            reply_markup=when_keyboard(),
+            f"👆 Так будет выглядеть альбом (кнопки под альбомом Telegram не поддерживает).\n"
+            f"Когда публикуем?",
+            reply_markup=kb,
         )
     else:
-        sent = await message.answer(text or "(пусто)", entities=entities, parse_mode=None, reply_markup=when_keyboard())
+        sent = await message.answer(text or "(пусто)", entities=entities, parse_mode=None, reply_markup=kb)
 
     await ui.track(user_id, sent)
+    await state.update_data(preview_message_id=sent.message_id)
+
+
+async def _restore_preview_markup(bot: Bot, chat_id: int, data: dict):
+    """Возвращаем предпросмотру его обычную клавиатуру (после 'назад')."""
+    preview_id = data.get("preview_message_id")
+    if not preview_id:
+        return
+    media_type = data.get("media_type")
+    allow_link_buttons = media_type != "album"
+    try:
+        await bot.edit_message_reply_markup(
+            chat_id, preview_id,
+            reply_markup=preview_keyboard(data.get("link_buttons"), allow_link_buttons),
+        )
+    except Exception as e:
+        logger.debug("Could not restore preview markup: %s", e)
+
+
+# ---------- кнопки-ссылки под постом ----------
+
+@router.callback_query(NewPost.choosing_time, F.data == "add_link_buttons")
+async def start_add_link_buttons(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await state.set_state(NewPost.waiting_buttons)
+
+    preview_id = data.get("preview_message_id")
+    if preview_id:
+        try:
+            await callback.bot.edit_message_reply_markup(
+                callback.message.chat.id, preview_id, reply_markup=back_only_keyboard()
+            )
+        except Exception:
+            pass
+
+    await ui.clear_previous(callback.bot, callback.message.chat.id, data["user_id"])
+    sent = await callback.message.answer(
+        "Пришли кнопки-ссылки под постом. Формат — одна кнопка на строку:\n"
+        "<code>Текст - ссылка</code>\n"
+        "Несколько кнопок в один ряд — через <code>|</code>\n\n"
+        "Например:\n"
+        "<code>Sweet - t.me/+TrZYZoeqUbQ2M</code>\n"
+        "<code>Сайт - https://example.com | Чат - https://t.me/chat</code>",
+        reply_markup=back_only_keyboard(),
+    )
+    await ui.track(data["user_id"], sent)
+    await callback.answer()
+
+
+@router.message(NewPost.waiting_buttons)
+async def receive_link_buttons(message: Message, state: FSMContext):
+    data = await state.get_data()
+    rows, bad_part = parse_link_buttons(message.text or "")
+    if rows is None:
+        hint = f"Не понял часть: <code>{html.escape(bad_part)}</code>\n" if bad_part else ""
+        await message.answer(
+            hint + "Формат: <code>Текст - ссылка</code>. Ссылка должна начинаться с "
+            "http://, https:// или tg://. Попробуй ещё раз, или «🔙 Назад»."
+        )
+        return
+
+    await state.update_data(link_buttons=rows)
+    await state.set_state(NewPost.choosing_time)
+    data = await state.get_data()
+
+    await _restore_preview_markup(message.bot, message.chat.id, data)
+    await ui.clear_previous(message.bot, message.chat.id, data["user_id"])
+    sent = await message.answer(f"✅ Кнопок добавлено: {sum(len(r) for r in rows)}")
+    await ui.track(data["user_id"], sent)
+
+
+@router.callback_query(NewPost.waiting_buttons, F.data == "preview_back")
+async def back_from_buttons(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await state.set_state(NewPost.choosing_time)
+    await _restore_preview_markup(callback.bot, callback.message.chat.id, data)
+    await ui.clear_previous(callback.bot, callback.message.chat.id, data["user_id"])
+    await callback.answer()
 
 
 # ---------- шаг: когда публиковать ----------
@@ -241,10 +372,21 @@ async def choose_when(callback: CallbackQuery, state: FSMContext, bot: Bot):
     if choice == "custom":
         tz_name = await get_user_tz_name(data["user_id"])
         await state.set_state(NewPost.waiting_custom_time)
+
+        preview_id = data.get("preview_message_id")
+        if preview_id:
+            try:
+                await bot.edit_message_reply_markup(
+                    callback.message.chat.id, preview_id, reply_markup=back_only_keyboard()
+                )
+            except Exception:
+                pass
+
         sent = await callback.message.answer(
             "Напиши дату и время публикации в формате:\n"
             "<code>31.12.2026 15:30</code>\n\n"
             f"Часовой пояс: {tz_name} (поменять — в ⚙️ Настройках)",
+            reply_markup=back_only_keyboard(),
         )
         await ui.track(data["user_id"], sent)
         await callback.answer()
@@ -259,6 +401,15 @@ async def choose_when(callback: CallbackQuery, state: FSMContext, bot: Bot):
     }[choice]
 
     await _finalize(callback.message, state, bot, publish_at, tz)
+    await callback.answer()
+
+
+@router.callback_query(NewPost.waiting_custom_time, F.data == "preview_back")
+async def back_from_custom_time(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await state.set_state(NewPost.choosing_time)
+    await _restore_preview_markup(callback.bot, callback.message.chat.id, data)
+    await ui.clear_previous(callback.bot, callback.message.chat.id, data["user_id"])
     await callback.answer()
 
 
@@ -284,9 +435,13 @@ async def custom_time_entered(message: Message, state: FSMContext, bot: Bot):
 
 async def _finalize(message: Message, state: FSMContext, bot: Bot, publish_at: datetime, tz):
     data = await state.get_data()
+    link_buttons = data.get("link_buttons")
+    button_json = json.dumps(link_buttons) if link_buttons else None
+
     post_id = await db.create_post(
         data["user_id"], data.get("text"), data["media_type"], data.get("file_id"),
         data.get("entities_json"), data.get("source_chat_id"), data.get("source_message_ids"),
+        button_json,
     )
 
     if data["media_type"] == "album" and data.get("album_items"):

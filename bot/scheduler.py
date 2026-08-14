@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 
 from aiogram import Bot
@@ -7,8 +8,17 @@ from aiogram.types import InputMediaPhoto, InputMediaVideo
 from bot import db
 from bot.config import POLL_INTERVAL_SECONDS
 from bot.entities_util import deserialize_entities
+from bot.keyboards import link_buttons_only_markup
 
 logger = logging.getLogger(__name__)
+
+
+def _button_markup(row):
+    try:
+        rows = json.loads(row["button_json"]) if row["button_json"] else None
+    except Exception:
+        rows = None
+    return link_buttons_only_markup(rows)
 
 
 async def _publish_via_copy(bot: Bot, row) -> list[int] | None:
@@ -20,11 +30,14 @@ async def _publish_via_copy(bot: Bot, row) -> list[int] | None:
         return None
     try:
         if row["media_type"] == "album":
+            # copyMessages не поддерживает reply_markup — кнопки-ссылки у альбомов
+            # в принципе недоступны (ограничение Telegram), поэтому просто копируем.
             results = await bot.copy_messages(row["chat_id"], row["source_chat_id"], row["source_message_ids"])
             return [r.message_id for r in results]
         else:
             result = await bot.copy_message(
-                row["chat_id"], row["source_chat_id"], row["source_message_ids"][0], parse_mode=None
+                row["chat_id"], row["source_chat_id"], row["source_message_ids"][0],
+                parse_mode=None, reply_markup=_button_markup(row),
             )
             return [result.message_id]
     except Exception as e:
@@ -37,16 +50,19 @@ async def _publish_via_reconstruct(bot: Bot, row) -> list[int]:
     Используется, если пост правили после создания, или если copy не удался."""
     chat_id = row["chat_id"]
     entities = deserialize_entities(row["entities_json"])
+    markup = _button_markup(row)
 
     if row["media_type"] == "photo":
         msg = await bot.send_photo(
-            chat_id, row["file_id"], caption=row["text"], caption_entities=entities, parse_mode=None
+            chat_id, row["file_id"], caption=row["text"], caption_entities=entities,
+            parse_mode=None, reply_markup=markup,
         )
         return [msg.message_id]
 
     if row["media_type"] == "video":
         msg = await bot.send_video(
-            chat_id, row["file_id"], caption=row["text"], caption_entities=entities, parse_mode=None
+            chat_id, row["file_id"], caption=row["text"], caption_entities=entities,
+            parse_mode=None, reply_markup=markup,
         )
         return [msg.message_id]
 
@@ -61,10 +77,10 @@ async def _publish_via_reconstruct(bot: Bot, row) -> list[int]:
                 kwargs["caption_entities"] = entities
                 kwargs["parse_mode"] = None
             media.append(cls(media=item["file_id"], **kwargs))
-        msgs = await bot.send_media_group(chat_id, media)
+        msgs = await bot.send_media_group(chat_id, media)  # sendMediaGroup не поддерживает reply_markup
         return [m.message_id for m in msgs]
 
-    msg = await bot.send_message(chat_id, row["text"], entities=entities, parse_mode=None)
+    msg = await bot.send_message(chat_id, row["text"], entities=entities, parse_mode=None, reply_markup=markup)
     return [msg.message_id]
 
 

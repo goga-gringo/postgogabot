@@ -44,6 +44,10 @@ ALTER TABLE posts ADD COLUMN IF NOT EXISTS source_message_ids BIGINT[];
 -- Если текст поста правили после создания (через "Мои посты") — оригинал в личке
 -- уже не соответствует новому тексту, публикуем через пересборку (file_id + entities).
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS text_edited BOOLEAN NOT NULL DEFAULT false;
+-- Кнопки-ссылки под постом: JSON-массив строк, каждая строка — массив
+-- {text, url}. Не работает для альбомов — Telegram не поддерживает
+-- reply_markup в sendMediaGroup/copyMessages.
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS button_json TEXT;
 
 -- Элементы альбома (media_type = 'album'), по порядку
 CREATE TABLE IF NOT EXISTS post_media (

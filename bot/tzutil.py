@@ -7,7 +7,7 @@ from bot import db
 # главное, чтобы имя было валидным IANA-идентификатором.
 COMMON_TIMEZONES = [
     ("Europe/Moscow", "Москва (UTC+3)"),
-    ("Europe/Kyiv", "Киев (UTC+3)"),
+    ("Asia/Yekaterinburg", "Екатеринбург (UTC+5)"),
     ("Europe/Minsk", "Минск (UTC+3)"),
     ("Asia/Almaty", "Алматы (UTC+6)"),
     ("Europe/Berlin", "Берлин (UTC+1/+2)"),
