@@ -34,6 +34,23 @@ async def get_or_create_user(tg_id: int) -> int:
         return row["id"]
 
 
+async def get_user(user_id: int):
+    async with pool().acquire() as conn:
+        return await conn.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
+
+
+async def set_user_timezone(user_id: int, timezone: str | None):
+    async with pool().acquire() as conn:
+        await conn.execute("UPDATE users SET timezone = $2 WHERE id = $1", user_id, timezone)
+
+
+async def set_user_default_delete_after(user_id: int, hours: int | None):
+    async with pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET default_delete_after_hours = $2 WHERE id = $1", user_id, hours
+        )
+
+
 # ---------- channels ----------
 
 async def add_channel(owner_id: int, chat_id: int, title: str) -> int:

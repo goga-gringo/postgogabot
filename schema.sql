@@ -5,6 +5,10 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Персональные настройки пользователя (необязательные, есть дефолты в коде)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS default_delete_after_hours INT;
+
 -- Подключённые каналы (бот должен быть там админом)
 CREATE TABLE IF NOT EXISTS channels (
     id BIGSERIAL PRIMARY KEY,

@@ -1,7 +1,6 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
 from aiogram import Router, F, Bot
 from aiogram.filters import StateFilter
@@ -9,13 +8,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 
 from bot import db
-from bot.config import TIMEZONE
+from bot.tzutil import get_user_tz, get_user_tz_name
 from bot.states import NewPost
 from bot.keyboards import channels_keyboard, delete_after_keyboard, when_keyboard
 
 router = Router()
 logger = logging.getLogger(__name__)
-TZ = ZoneInfo(TIMEZONE)
 
 # Сбор альбомов: Telegram присылает медиагруппу как несколько отдельных апдейтов
 # подряд — собираем их в буфер и обрабатываем одним постом через небольшую паузу.
@@ -155,8 +153,10 @@ async def channels_done(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Выбери хотя бы один канал!", show_alert=True)
         return
     await state.set_state(NewPost.choosing_delete_after)
+    user = await db.get_user(data["user_id"])
+    default_hours = user["default_delete_after_hours"] if user else None
     await callback.message.edit_text(
-        "Когда удалить пост после публикации?", reply_markup=delete_after_keyboard()
+        "Когда удалить пост после публикации?", reply_markup=delete_after_keyboard(default_hours)
     )
     await callback.answer()
 
@@ -180,47 +180,52 @@ async def choose_delete_after(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(NewPost.choosing_time, F.data.startswith("when:"))
 async def choose_when(callback: CallbackQuery, state: FSMContext, bot: Bot):
     choice = callback.data.split(":")[1]
+    data = await state.get_data()
 
     if choice == "custom":
+        tz_name = await get_user_tz_name(data["user_id"])
         await state.set_state(NewPost.waiting_custom_time)
         await callback.message.edit_text(
             "Напиши дату и время публикации в формате:\n"
             "<code>31.12.2026 15:30</code>\n\n"
-            f"Часовой пояс: {TIMEZONE}",
+            f"Часовой пояс: {tz_name} (поменять — в ⚙️ Настройках)",
         )
         await callback.answer()
         return
 
-    now = datetime.now(TZ)
+    tz = await get_user_tz(data["user_id"])
+    now = datetime.now(tz)
     publish_at = {
         "now": now,
         "1h": now + timedelta(hours=1),
         "3h": now + timedelta(hours=3),
     }[choice]
 
-    await _finalize(callback.message, state, bot, publish_at)
+    await _finalize(callback.message, state, bot, publish_at, tz)
     await callback.answer()
 
 
 @router.message(NewPost.waiting_custom_time)
 async def custom_time_entered(message: Message, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    tz = await get_user_tz(data["user_id"])
     try:
         naive = datetime.strptime(message.text.strip(), "%d.%m.%Y %H:%M")
-        publish_at = naive.replace(tzinfo=TZ)
+        publish_at = naive.replace(tzinfo=tz)
     except ValueError:
         await message.answer("Не понял формат. Пример: 31.12.2026 15:30")
         return
 
-    if publish_at < datetime.now(TZ):
+    if publish_at < datetime.now(tz):
         await message.answer("Это время уже в прошлом. Введи время в будущем.")
         return
 
-    await _finalize(message, state, bot, publish_at)
+    await _finalize(message, state, bot, publish_at, tz)
 
 
 # ---------- финал: создаём пост и таргеты ----------
 
-async def _finalize(message: Message, state: FSMContext, bot: Bot, publish_at: datetime):
+async def _finalize(message: Message, state: FSMContext, bot: Bot, publish_at: datetime, tz):
     data = await state.get_data()
     post_id = await db.create_post(data["user_id"], data.get("text"), data["media_type"], data.get("file_id"))
 
@@ -234,7 +239,7 @@ async def _finalize(message: Message, state: FSMContext, bot: Bot, publish_at: d
     channels = await db.list_channels(data["user_id"])
     names = [c["title"] for c in channels if c["id"] in set(data["selected_channels"])]
 
-    when_str = "сейчас" if publish_at <= datetime.now(TZ) + timedelta(seconds=30) \
+    when_str = "сейчас" if publish_at <= datetime.now(tz) + timedelta(seconds=30) \
         else publish_at.strftime("%d.%m.%Y %H:%M")
 
     text = (
@@ -244,7 +249,7 @@ async def _finalize(message: Message, state: FSMContext, bot: Bot, publish_at: d
         f"Удаление: {_delete_after_label(data.get('delete_after_hours'))}\n\n"
         "Бот проверяет расписание регулярно, публикация появится в течение "
         "пары десятков секунд после назначенного времени.\n\n"
-        "Изменить текст поста позже можно через /myposts"
+        "Изменить текст поста позже можно в разделе «📋 Мои посты»"
     )
 
     if isinstance(message, Message) and message.text is None and message.caption is None:

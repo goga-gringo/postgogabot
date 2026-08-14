@@ -8,7 +8,7 @@ from aiogram.enums import ParseMode
 from bot.config import BOT_TOKEN
 from bot import db
 from bot.scheduler import publisher_loop, cleaner_loop
-from bot.handlers import start, channels, edit, posts
+from bot.handlers import start, channels, edit, menu, posts
 
 logging.basicConfig(level=logging.INFO)
 
@@ -22,6 +22,7 @@ async def main():
     dp.include_router(start.router)
     dp.include_router(channels.router)
     dp.include_router(edit.router)
+    dp.include_router(menu.router)
     dp.include_router(posts.router)
 
     asyncio.create_task(publisher_loop(bot))
