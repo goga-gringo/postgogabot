@@ -3,7 +3,7 @@ import string
 import time
 
 from aiogram import Router, F, Bot
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.types import Message, CallbackQuery, MessageOriginChannel
 
 from bot import db
@@ -136,8 +136,12 @@ async def handle_channel_post(message: Message, bot: Bot):
 
 # ---------- запасной способ: пересылка сообщения из канала ----------
 # Работает, если пересылаемый пост НЕ является репостом из другого канала.
+# StateFilter(None) — важно: если пользователь сейчас в процессе создания поста
+# (пересылает контент ДЛЯ ПУБЛИКАЦИИ, а не для подключения канала), этот
+# обработчик не должен перехватывать сообщение — оно должно уйти в приём
+# контента поста (posts.py).
 
-@router.message(F.forward_origin.as_("origin"))
+@router.message(F.forward_origin.as_("origin"), StateFilter(None))
 async def handle_forwarded(message: Message, origin: MessageOriginChannel, bot: Bot):
     if origin.type != "channel":
         await message.answer(
