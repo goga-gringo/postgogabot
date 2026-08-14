@@ -7,6 +7,7 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, MessageOriginChannel
 
 from bot import db
+from bot import ui
 from bot.keyboards import channels_menu_keyboard
 
 router = Router()
@@ -21,10 +22,13 @@ def _generate_code() -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
 
-async def _send_add_instructions(target, tg_id: int):
+async def _send_add_instructions(target, tg_id: int, prefix: str = ""):
     code = _generate_code()
     _pending_codes[code] = {"tg_id": tg_id, "expires": time.time() + CODE_TTL_SECONDS}
-    await target.answer(
+    user_id = await db.get_or_create_user(tg_id)
+    await ui.clear_previous(target.bot, target.chat.id, user_id)
+    sent = await target.answer(
+        prefix +
         "Чтобы подключить канал:\n\n"
         "1. Добавь меня в канал как администратора с правами:\n"
         "   • Публикация сообщений\n"
@@ -33,6 +37,7 @@ async def _send_add_instructions(target, tg_id: int):
         f"2. Опубликуй в канале сообщение с этим кодом (я сам его удалю):\n\n<code>{code}</code>\n\n"
         "Код действует 10 минут.",
     )
+    await ui.track(user_id, sent)
 
 
 async def cmd_channels(message: Message):
@@ -40,10 +45,11 @@ async def cmd_channels(message: Message):
     user_id = await db.get_or_create_user(message.from_user.id)
     channels = await db.list_channels(user_id)
     if not channels:
-        await message.answer("Пока нет подключённых каналов.")
-        await _send_add_instructions(message, message.from_user.id)
+        await _send_add_instructions(message, message.from_user.id, prefix="Пока нет подключённых каналов.\n\n")
         return
-    await message.answer("Твои каналы:", reply_markup=channels_menu_keyboard(channels))
+    await ui.clear_previous(message.bot, message.chat.id, user_id)
+    sent = await message.answer("Твои каналы:", reply_markup=channels_menu_keyboard(channels))
+    await ui.track(user_id, sent)
 
 
 @router.message(Command("addchannel"))
@@ -134,7 +140,12 @@ async def handle_channel_post(message: Message, bot: Bot):
 @router.message(F.forward_origin.as_("origin"))
 async def handle_forwarded(message: Message, origin: MessageOriginChannel, bot: Bot):
     if origin.type != "channel":
-        await message.answer("Это не похоже на пересланное сообщение из канала.")
+        await message.answer(
+            "Не могу определить исходный канал по этой пересылке "
+            "(Telegram скрывает эту информацию для репостов и части пересланных сообщений).\n\n"
+            "Пересылка вообще ненадёжна для подключения канала — используй способ через код: "
+            "«📢 Мои каналы» → «➕ Добавить канал»."
+        )
         return
 
     chat = origin.chat

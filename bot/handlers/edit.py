@@ -8,6 +8,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot import db
+from bot import ui
 from bot.states import EditPost
 from bot.entities_util import serialize_entities, deserialize_entities
 
@@ -26,8 +27,10 @@ def _plain_preview(text: str | None, length: int = 40) -> str:
 async def cmd_myposts(message: Message):
     user_id = await db.get_or_create_user(message.from_user.id)
     posts = await db.list_user_posts(user_id)
+    await ui.clear_previous(message.bot, message.chat.id, user_id)
     if not posts:
-        await message.answer("Постов пока нет. Пришли текст/фото/видео, чтобы создать первый.")
+        sent = await message.answer("Постов пока нет. Пришли текст/фото/видео, чтобы создать первый.")
+        await ui.track(user_id, sent)
         return
 
     b = InlineKeyboardBuilder()
@@ -36,7 +39,8 @@ async def cmd_myposts(message: Message):
         status = f"{p['published_count']}/{p['targets_count']} опубл."
         b.button(text=f"#{p['id']} [{p['media_type']}] {preview} — {status}", callback_data=f"editpost:{p['id']}")
     b.adjust(1)
-    await message.answer("Твои последние посты:", reply_markup=b.as_markup())
+    sent = await message.answer("Твои последние посты:", reply_markup=b.as_markup())
+    await ui.track(user_id, sent)
 
 
 @router.callback_query(F.data.startswith("editpost:"))
@@ -49,6 +53,11 @@ async def show_post(callback: CallbackQuery):
         return
 
     targets = await db.get_targets_for_post(post_id)
+    if all(t["status"] == "deleted" for t in targets):
+        await callback.message.edit_text(f"Пост #{post_id} удалён отовсюду.")
+        await callback.answer()
+        return
+
     lines = [
         f"<b>Пост #{post_id}</b> ({html_lib.escape(post['media_type'] or '')})",
         "",
@@ -135,7 +144,10 @@ async def apply_new_text(message: Message, state: FSMContext, bot: Bot):
     if failed:
         reply += f"\n⚠️ Не удалось обновить {failed} шт.:\n" + "\n".join(errors[:5])
     reply += "\n\nЗапланированные, ещё не опубликованные посты выйдут уже с новым текстом."
-    await message.answer(reply)
+    user_id = await db.get_or_create_user(message.from_user.id)
+    await ui.clear_previous(bot, message.chat.id, user_id)
+    sent = await message.answer(reply)
+    await ui.track(user_id, sent)
 
 
 # ---------- удаление поста: везде или из одного канала ----------

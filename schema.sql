@@ -8,6 +8,9 @@ CREATE TABLE IF NOT EXISTS users (
 -- Персональные настройки пользователя (необязательные, есть дефолты в коде)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS default_delete_after_hours INT;
+-- id последнего "экранного" сообщения бота этому пользователю — чтобы удалять
+-- его перед показом нового экрана и не плодить вереницу сообщений с мёртвыми кнопками
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bot_message_id BIGINT;
 
 -- Подключённые каналы (бот должен быть там админом)
 CREATE TABLE IF NOT EXISTS channels (

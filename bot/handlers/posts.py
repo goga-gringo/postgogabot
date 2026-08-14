@@ -12,6 +12,7 @@ from bot.tzutil import get_user_tz, get_user_tz_name
 from bot.states import NewPost
 from bot.entities_util import serialize_entities, deserialize_entities
 from bot.keyboards import channels_keyboard, delete_after_keyboard, when_keyboard
+from bot import ui
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -35,12 +36,14 @@ async def start_new_post(message: Message, state: FSMContext, from_user_id: int)
         await message.answer("Сначала подключи хотя бы один канал: «📢 Мои каналы»")
         return
 
+    await ui.clear_previous(message.bot, message.chat.id, user_id)
     await state.update_data(selected_channels=[], user_id=user_id)
     await state.set_state(NewPost.choosing_channels)
-    await message.answer(
+    sent = await message.answer(
         "В какие каналы постим? Отметь один или несколько:",
         reply_markup=channels_keyboard(channels, set()),
     )
+    await ui.track(user_id, sent)
 
 
 @router.callback_query(NewPost.choosing_channels, F.data.startswith("ch:"))
@@ -166,11 +169,15 @@ async def stray_content(message: Message):
 async def _go_to_delete_after(message: Message, state: FSMContext):
     await state.set_state(NewPost.choosing_delete_after)
     data = await state.get_data()
-    user = await db.get_user(data["user_id"])
+    user_id = data["user_id"]
+
+    await ui.clear_previous(message.bot, message.chat.id, user_id)
+    user = await db.get_user(user_id)
     default_hours = user["default_delete_after_hours"] if user else None
-    await message.answer(
+    sent = await message.answer(
         "Когда удалить пост после публикации?", reply_markup=delete_after_keyboard(default_hours)
     )
+    await ui.track(user_id, sent)
 
 
 @router.callback_query(NewPost.choosing_delete_after, F.data.startswith("del:"))
@@ -179,25 +186,27 @@ async def choose_delete_after(callback: CallbackQuery, state: FSMContext):
     await state.update_data(delete_after_hours=hours)
     await state.set_state(NewPost.choosing_time)
 
-    await callback.message.edit_text(f"Отметка удаления: {_delete_after_label(hours)}.")
     data = await state.get_data()
-    await _send_preview(callback.message, data)
+    user_id = data["user_id"]
+    await ui.clear_previous(callback.bot, callback.message.chat.id, user_id)
+    await _send_preview(callback.message, data, _delete_after_label(hours))
     await callback.answer()
 
 
-async def _send_preview(message: Message, data: dict):
+async def _send_preview(message: Message, data: dict, delete_label: str):
     """Показываем пост так, как он реально будет выглядеть, и вешаем кнопки
     'когда публикуем' прямо под предпросмотром."""
+    user_id = data["user_id"]
     media_type = data["media_type"]
     text = data.get("text")
     entities = deserialize_entities(data.get("entities_json"))
 
     if media_type == "photo":
-        await message.answer_photo(
+        sent = await message.answer_photo(
             data["file_id"], caption=text, caption_entities=entities, parse_mode=None, reply_markup=when_keyboard()
         )
     elif media_type == "video":
-        await message.answer_video(
+        sent = await message.answer_video(
             data["file_id"], caption=text, caption_entities=entities, parse_mode=None, reply_markup=when_keyboard()
         )
     elif media_type == "album":
@@ -212,9 +221,14 @@ async def _send_preview(message: Message, data: dict):
                 kwargs["parse_mode"] = None
             media.append(cls(media=item["file_id"], **kwargs))
         await message.answer_media_group(media)
-        await message.answer("👆 Так будет выглядеть альбом. Когда публикуем?", reply_markup=when_keyboard())
+        sent = await message.answer(
+            f"👆 Так будет выглядеть альбом.\nОтметка удаления: {delete_label}\n\nКогда публикуем?",
+            reply_markup=when_keyboard(),
+        )
     else:
-        await message.answer(text or "(пусто)", entities=entities, parse_mode=None, reply_markup=when_keyboard())
+        sent = await message.answer(text or "(пусто)", entities=entities, parse_mode=None, reply_markup=when_keyboard())
+
+    await ui.track(user_id, sent)
 
 
 # ---------- шаг: когда публиковать ----------
@@ -227,11 +241,12 @@ async def choose_when(callback: CallbackQuery, state: FSMContext, bot: Bot):
     if choice == "custom":
         tz_name = await get_user_tz_name(data["user_id"])
         await state.set_state(NewPost.waiting_custom_time)
-        await callback.message.answer(
+        sent = await callback.message.answer(
             "Напиши дату и время публикации в формате:\n"
             "<code>31.12.2026 15:30</code>\n\n"
             f"Часовой пояс: {tz_name} (поменять — в ⚙️ Настройках)",
         )
+        await ui.track(data["user_id"], sent)
         await callback.answer()
         return
 
@@ -294,7 +309,9 @@ async def _finalize(message: Message, state: FSMContext, bot: Bot, publish_at: d
         f"Удаление: {_delete_after_label(data.get('delete_after_hours'))}\n\n"
         "Изменить текст поста позже можно в разделе «📋 Мои посты»"
     )
-    await message.answer(text)
+    await ui.clear_previous(bot, message.chat.id, data["user_id"])
+    sent = await message.answer(text)
+    await ui.track(data["user_id"], sent)
     await state.clear()
 
 

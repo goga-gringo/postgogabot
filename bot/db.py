@@ -51,6 +51,13 @@ async def set_user_default_delete_after(user_id: int, hours: int | None):
         )
 
 
+async def set_last_message_id(user_id: int, message_id: int | None):
+    async with pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET last_bot_message_id = $2 WHERE id = $1", user_id, message_id
+        )
+
+
 # ---------- channels ----------
 
 async def add_channel(owner_id: int, chat_id: int, title: str) -> int:
@@ -126,11 +133,13 @@ async def list_user_posts(owner_id: int, limit: int = 15):
             SELECT p.id, p.text, p.media_type, p.created_at,
                    COUNT(pt.id) AS targets_count,
                    COUNT(*) FILTER (WHERE pt.status = 'published') AS published_count,
-                   COUNT(*) FILTER (WHERE pt.status = 'scheduled') AS scheduled_count
+                   COUNT(*) FILTER (WHERE pt.status = 'scheduled') AS scheduled_count,
+                   COUNT(*) FILTER (WHERE pt.status != 'deleted') AS active_count
             FROM posts p
             JOIN post_targets pt ON pt.post_id = p.id
             WHERE p.owner_id = $1
             GROUP BY p.id
+            HAVING COUNT(*) FILTER (WHERE pt.status != 'deleted') > 0
             ORDER BY p.created_at DESC
             LIMIT $2
             """,

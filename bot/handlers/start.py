@@ -3,6 +3,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
 
 from bot import db
+from bot import ui
 from bot.keyboards import main_menu_keyboard
 
 router = Router()
@@ -10,20 +11,22 @@ router = Router()
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
-    await db.get_or_create_user(message.from_user.id)
+    user_id = await db.get_or_create_user(message.from_user.id)
+    await ui.clear_previous(message.bot, message.chat.id, user_id)
     await message.answer(
         "Привет! Я планировщик постов для твоих Telegram-каналов.\n\n"
         "Как пользоваться:\n"
         "1️⃣ «📢 Мои каналы» → добавь канал (сначала сделай меня админом канала с правами "
         "публикации, редактирования и удаления сообщений)\n"
-        "2️⃣ «📝 Создать пост» → пришли текст, фото, видео или альбом — "
-        "форматирование и premium-эмодзи сохранятся\n"
+        "2️⃣ «📝 Создать пост» → пришли текст, фото, видео или альбом\n"
         "3️⃣ Выбери, в какие каналы постить (можно сразу несколько), когда удалить "
         "и когда опубликовать\n\n"
         "Меню внизу — основные разделы. «📋 Мои посты» — там же редактирование текста "
         "(в т.ч. уже опубликованных постов), «⚙️ Настройки» — часовой пояс и автоудаление по умолчанию.",
         reply_markup=main_menu_keyboard(),
     )
+    # само приветствие не трекаем — у него есть постоянная reply-клавиатура,
+    # его не нужно чистить как промежуточный экран
 
 
 @router.message(Command("cancel"))

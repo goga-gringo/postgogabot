@@ -3,6 +3,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 
 from bot import db
+from bot import ui
 from bot.tzutil import get_user_tz_name
 from bot.keyboards import (
     settings_keyboard,
@@ -40,13 +41,15 @@ async def menu_settings(message: Message, state: FSMContext):
     user = await db.get_user(user_id)
     tz_name = await get_user_tz_name(user_id)
     default_hours = user["default_delete_after_hours"] if user else None
-    await message.answer(
+    await ui.clear_previous(message.bot, message.chat.id, user_id)
+    sent = await message.answer(
         "⚙️ Настройки\n\n"
         "Часовой пояс — используется для ручного ввода времени публикации.\n"
         "Автоудаление по умолчанию — какая опция будет отмечена звёздочкой ⭐ "
         "при создании поста (можно всегда выбрать другую вручную).",
         reply_markup=settings_keyboard(tz_name, default_hours),
     )
+    await ui.track(user_id, sent)
 
 
 @router.callback_query(F.data.startswith("tz:"))
