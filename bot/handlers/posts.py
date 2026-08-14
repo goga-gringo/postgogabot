@@ -135,6 +135,26 @@ async def channels_done(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# Прислали контент, ещё не выбрав каналы — не молчим, а напоминаем и
+# заново показываем список с уже отмеченными галочками.
+@router.message(NewPost.choosing_channels)
+async def content_before_channels(message: Message, state: FSMContext):
+    if message.text and message.text.startswith("/"):
+        return
+    data = await state.get_data()
+    user_id = data["user_id"]
+    channels = await db.list_channels(user_id)
+    selected = set(data.get("selected_channels", []))
+
+    await ui.clear_previous(message.bot, message.chat.id, user_id)
+    sent = await message.answer(
+        "Сначала отметь каналы галочками и жми «➡️ Далее» — потом пришлю "
+        "запрос на контент ещё раз.",
+        reply_markup=channels_keyboard(channels, selected),
+    )
+    await ui.track(user_id, sent)
+
+
 # ---------- контент принимаем только после того, как выбраны каналы ----------
 
 @router.message((F.photo | F.video) & ~F.media_group_id, NewPost.waiting_content)
@@ -332,7 +352,9 @@ async def start_add_link_buttons(callback: CallbackQuery, state: FSMContext):
         except Exception:
             pass
 
-    await ui.clear_previous(callback.bot, callback.message.chat.id, data["user_id"])
+    # Не чистим предыдущее сообщение здесь: сейчас 'последнее' — это сам
+    # предпросмотр, его нужно оставить (только что поменяли ему клавиатуру),
+    # а не удалять.
     sent = await callback.message.answer(
         "Пришли кнопки-ссылки под постом. Формат — одна кнопка на строку:\n"
         "<code>Текст - ссылка</code>\n"
