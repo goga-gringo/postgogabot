@@ -11,6 +11,7 @@ from aiogram.types import Message, CallbackQuery, InputMediaPhoto, InputMediaVid
 
 from bot import db
 from bot import ui
+from bot.i18n import t, get_user_lang
 from bot.tzutil import get_user_tz, get_user_tz_name
 from bot.states import NewPost
 from bot.entities_util import serialize_entities, deserialize_entities
@@ -28,8 +29,8 @@ _album_buffers: dict[str, list[Message]] = {}
 _pending_album_buffers: dict[str, list[Message]] = {}
 
 
-def _delete_after_label(hours: int | None) -> str:
-    return "не удалять" if not hours else f"удалить через {hours}ч"
+def _delete_after_label(hours: int | None, lang: str) -> str:
+    return t(lang, "newpost.delete_never") if not hours else t(lang, "newpost.delete_in_hours", h=hours)
 
 
 def parse_link_buttons(text: str):
@@ -136,17 +137,18 @@ def _content_fields_from_album(messages: list[Message]) -> dict | None:
 
 async def start_new_post(message: Message, state: FSMContext, from_user_id: int):
     user_id = await db.get_or_create_user(from_user_id)
+    lang = await get_user_lang(user_id)
     channels = await db.list_channels(user_id)
     if not channels:
-        await message.answer("Сначала подключи хотя бы один канал: «📢 Мои каналы»")
+        await message.answer(t(lang, "newpost.no_channels"))
         return
 
     await ui.clear_previous(message.bot, message.chat.id, user_id)
     await state.update_data(selected_channels=[], user_id=user_id, pending_content=None)
     await state.set_state(NewPost.choosing_channels)
     sent = await message.answer(
-        "В какие каналы постим? Отметь один или несколько:",
-        reply_markup=channels_keyboard(channels, set()),
+        t(lang, "newpost.choose_channels"),
+        reply_markup=channels_keyboard(channels, set(), lang),
     )
     await ui.track(user_id, sent)
 
@@ -155,6 +157,7 @@ async def start_new_post(message: Message, state: FSMContext, from_user_id: int)
 async def toggle_channel(callback: CallbackQuery, state: FSMContext):
     channel_id = int(callback.data.split(":")[1])
     data = await state.get_data()
+    lang = await get_user_lang(data["user_id"])
     selected = set(data.get("selected_channels", []))
     if channel_id in selected:
         selected.discard(channel_id)
@@ -163,43 +166,42 @@ async def toggle_channel(callback: CallbackQuery, state: FSMContext):
     await state.update_data(selected_channels=list(selected))
 
     channels = await db.list_channels(data["user_id"])
-    await callback.message.edit_reply_markup(reply_markup=channels_keyboard(channels, selected))
+    await callback.message.edit_reply_markup(reply_markup=channels_keyboard(channels, selected, lang))
     await callback.answer()
 
 
 @router.callback_query(NewPost.choosing_channels, F.data == "toggle_all")
 async def toggle_all_channels(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    lang = await get_user_lang(data["user_id"])
     channels = await db.list_channels(data["user_id"])
     all_ids = {c["id"] for c in channels}
     selected = set(data.get("selected_channels", []))
     selected = set() if selected == all_ids else set(all_ids)
     await state.update_data(selected_channels=list(selected))
-    await callback.message.edit_reply_markup(reply_markup=channels_keyboard(channels, selected))
+    await callback.message.edit_reply_markup(reply_markup=channels_keyboard(channels, selected, lang))
     await callback.answer()
 
 
 @router.callback_query(NewPost.choosing_channels, F.data == "channels_done")
 async def channels_done(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    lang = await get_user_lang(data["user_id"])
     if not data.get("selected_channels"):
-        await callback.answer("Выбери хотя бы один канал!", show_alert=True)
+        await callback.answer(t(lang, "newpost.select_at_least_one"), show_alert=True)
         return
 
     pending = data.get("pending_content")
     if pending:
         # Контент уже прислали до того, как выбрали каналы — не спрашиваем повторно.
         await state.update_data(**pending, pending_content=None)
-        await callback.message.edit_text("Каналы выбраны ✅ Использую пост, который ты уже прислал.")
+        await callback.message.edit_text(t(lang, "newpost.channels_selected_using_pending"))
         await _go_to_delete_after(callback.message, state)
         await callback.answer()
         return
 
     await state.set_state(NewPost.waiting_content)
-    await callback.message.edit_text(
-        "Каналы выбраны ✅\n\nТеперь пришли текст, фото, видео или альбом — "
-        "это станет содержимым поста."
-    )
+    await callback.message.edit_text(t(lang, "newpost.channels_selected_send_content"))
     await callback.answer()
 
 
@@ -228,6 +230,7 @@ async def _process_pending_album(gid: str, state: FSMContext, bot: Bot):
     await state.update_data(pending_content=fields)
     data = await state.get_data()
     user_id = data["user_id"]
+    lang = await get_user_lang(user_id)
     channels = await db.list_channels(user_id)
     selected = set(data.get("selected_channels", []))
 
@@ -235,9 +238,8 @@ async def _process_pending_album(gid: str, state: FSMContext, bot: Bot):
     await ui.clear_previous(bot, chat_id, user_id)
     sent = await bot.send_message(
         chat_id,
-        f"Альбом из {len(fields['album_items'])} медиафайлов принят — жду выбор каналов.\n"
-        "Отметь галочками и жми «➡️ Далее».",
-        reply_markup=channels_keyboard(channels, selected),
+        t(lang, "newpost.pending_album_prompt", n=len(fields["album_items"])),
+        reply_markup=channels_keyboard(channels, selected, lang),
     )
     await ui.track(user_id, sent)
 
@@ -252,13 +254,14 @@ async def content_before_channels(message: Message, state: FSMContext):
 
     data = await state.get_data()
     user_id = data["user_id"]
+    lang = await get_user_lang(user_id)
     channels = await db.list_channels(user_id)
     selected = set(data.get("selected_channels", []))
 
     await ui.clear_previous(message.bot, message.chat.id, user_id)
     sent = await message.answer(
-        "Пост принят — жду выбор каналов.\nОтметь галочками и жми «➡️ Далее».",
-        reply_markup=channels_keyboard(channels, selected),
+        t(lang, "newpost.pending_prompt"),
+        reply_markup=channels_keyboard(channels, selected, lang),
     )
     await ui.track(user_id, sent)
 
@@ -291,7 +294,9 @@ async def _process_album(gid: str, state: FSMContext, bot: Bot):
         return
 
     await state.update_data(**fields)
-    await bot.send_message(messages[0].chat.id, f"Альбом из {len(fields['album_items'])} медиафайлов принят.")
+    data = await state.get_data()
+    lang = await get_user_lang(data["user_id"])
+    await bot.send_message(messages[0].chat.id, t(lang, "newpost.album_received", n=len(fields["album_items"])))
     await _go_to_delete_after(messages[0], state)
 
 
@@ -307,10 +312,9 @@ async def receive_text_content(message: Message, state: FSMContext):
 async def stray_content(message: Message):
     if message.text and message.text.startswith("/"):
         return
-    await message.answer(
-        "Чтобы создать пост, сначала нажми «📝 Создать пост» внизу — "
-        "там сперва выбираем каналы, потом присылаем контент."
-    )
+    user_id = await db.get_or_create_user(message.from_user.id)
+    lang = await get_user_lang(user_id)
+    await message.answer(t(lang, "newpost.stray_reminder"))
 
 
 # ---------- шаг: через сколько удалить → показываем предпросмотр ----------
@@ -319,12 +323,13 @@ async def _go_to_delete_after(message: Message, state: FSMContext):
     await state.set_state(NewPost.choosing_delete_after)
     data = await state.get_data()
     user_id = data["user_id"]
+    lang = await get_user_lang(user_id)
 
     await ui.clear_previous(message.bot, message.chat.id, user_id)
     user = await db.get_user(user_id)
     default_hours = user["default_delete_after_hours"] if user else None
     sent = await message.answer(
-        "Когда удалить пост после публикации?", reply_markup=delete_after_keyboard(default_hours)
+        t(lang, "newpost.delete_after_prompt"), reply_markup=delete_after_keyboard(default_hours, lang)
     )
     await ui.track(user_id, sent)
 
@@ -347,12 +352,13 @@ async def _send_preview(message: Message, data: dict, state: FSMContext):
     'когда публикуем' + опционально кнопки-ссылки. Запоминаем id этого
     сообщения, чтобы потом можно было менять его клавиатуру на месте."""
     user_id = data["user_id"]
+    lang = await get_user_lang(user_id)
     media_type = data["media_type"]
     text = data.get("text")
     entities = deserialize_entities(data.get("entities_json"))
     link_buttons = data.get("link_buttons")
     allow_link_buttons = media_type != "album"  # Telegram не поддерживает reply_markup в альбомах
-    kb = preview_keyboard(link_buttons, allow_link_buttons)
+    kb = preview_keyboard(link_buttons, allow_link_buttons, lang)
 
     if media_type == "photo":
         sent = await message.answer_photo(
@@ -374,13 +380,9 @@ async def _send_preview(message: Message, data: dict, state: FSMContext):
                 kwargs["parse_mode"] = None
             media.append(cls(media=item["file_id"], **kwargs))
         await message.answer_media_group(media)
-        sent = await message.answer(
-            "👆 Так будет выглядеть альбом (кнопки под альбомом Telegram не поддерживает).\n"
-            "Когда публикуем?",
-            reply_markup=kb,
-        )
+        sent = await message.answer(t(lang, "newpost.album_preview_note"), reply_markup=kb)
     else:
-        sent = await message.answer(text or "(пусто)", entities=entities, parse_mode=None, reply_markup=kb)
+        sent = await message.answer(text or "—", entities=entities, parse_mode=None, reply_markup=kb)
 
     await ui.track(user_id, sent)
     await state.update_data(preview_message_id=sent.message_id)
@@ -409,13 +411,14 @@ async def _return_to_preview(bot: Bot, chat_id: int, state: FSMContext, data: di
 @router.callback_query(NewPost.choosing_time, F.data == "add_link_buttons")
 async def start_add_link_buttons(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    lang = await get_user_lang(data["user_id"])
     await state.set_state(NewPost.waiting_buttons)
 
     preview_id = data.get("preview_message_id")
     if preview_id:
         try:
             await callback.bot.edit_message_reply_markup(
-                callback.message.chat.id, preview_id, reply_markup=back_only_keyboard()
+                callback.message.chat.id, preview_id, reply_markup=back_only_keyboard(lang)
             )
         except Exception:
             pass
@@ -423,13 +426,8 @@ async def start_add_link_buttons(callback: CallbackQuery, state: FSMContext):
     # Не чистим предыдущее сообщение здесь: сейчас 'последнее' — это сам
     # предпросмотр, его нужно оставить (только что поменяли ему клавиатуру).
     sent = await callback.message.answer(
-        "Пришли кнопки-ссылки под постом. Формат — одна кнопка на строку:\n"
-        "<code>Текст - ссылка</code>\n"
-        "Несколько кнопок в один ряд — через <code>|</code>\n\n"
-        "Например:\n"
-        "<code>Подписаться - t.me/durov</code>\n"
-        "<code>Сайт - https://example.com | Чат - https://t.me/chat</code>",
-        reply_markup=back_only_keyboard(),
+        t(lang, "newpost.link_buttons_prompt"),
+        reply_markup=back_only_keyboard(lang),
     )
     await ui.track(data["user_id"], sent)
     await callback.answer()
@@ -438,13 +436,11 @@ async def start_add_link_buttons(callback: CallbackQuery, state: FSMContext):
 @router.message(NewPost.waiting_buttons)
 async def receive_link_buttons(message: Message, state: FSMContext):
     data = await state.get_data()
+    lang = await get_user_lang(data["user_id"])
     rows, bad_part = parse_link_buttons(message.text or "")
     if rows is None:
-        hint = f"Не понял часть: <code>{html.escape(bad_part)}</code>\n" if bad_part else ""
-        await message.answer(
-            hint + "Формат: <code>Текст - ссылка</code>. Ссылка должна начинаться с "
-            "http://, https:// или tg://. Попробуй ещё раз, или «🔙 Назад»."
-        )
+        hint = t(lang, "newpost.link_buttons_bad_part", part=html.escape(bad_part)) if bad_part else ""
+        await message.answer(t(lang, "newpost.link_buttons_bad_format", hint=hint))
         return
 
     await state.update_data(link_buttons=rows)
@@ -465,6 +461,7 @@ async def back_from_buttons(callback: CallbackQuery, state: FSMContext):
 async def choose_when(callback: CallbackQuery, state: FSMContext, bot: Bot):
     choice = callback.data.split(":")[1]
     data = await state.get_data()
+    lang = await get_user_lang(data["user_id"])
 
     if choice == "custom":
         tz_name = await get_user_tz_name(data["user_id"])
@@ -474,16 +471,14 @@ async def choose_when(callback: CallbackQuery, state: FSMContext, bot: Bot):
         if preview_id:
             try:
                 await bot.edit_message_reply_markup(
-                    callback.message.chat.id, preview_id, reply_markup=back_only_keyboard()
+                    callback.message.chat.id, preview_id, reply_markup=back_only_keyboard(lang)
                 )
             except Exception:
                 pass
 
         sent = await callback.message.answer(
-            "Напиши дату и время публикации в формате:\n"
-            "<code>31.12.2026 15:30</code>\n\n"
-            f"Часовой пояс: {tz_name} (поменять — в ⚙️ Настройках)",
-            reply_markup=back_only_keyboard(),
+            t(lang, "newpost.custom_time_prompt", tz=tz_name),
+            reply_markup=back_only_keyboard(lang),
         )
         await ui.track(data["user_id"], sent)
         await callback.answer()
@@ -511,16 +506,17 @@ async def back_from_custom_time(callback: CallbackQuery, state: FSMContext):
 @router.message(NewPost.waiting_custom_time)
 async def custom_time_entered(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
+    lang = await get_user_lang(data["user_id"])
     tz = await get_user_tz(data["user_id"])
     try:
         naive = datetime.strptime(message.text.strip(), "%d.%m.%Y %H:%M")
         publish_at = naive.replace(tzinfo=tz)
     except ValueError:
-        await message.answer("Не понял формат. Пример: 31.12.2026 15:30")
+        await message.answer(t(lang, "newpost.custom_time_bad_format"))
         return
 
     if publish_at < datetime.now(tz):
-        await message.answer("Это время уже в прошлом. Введи время в будущем.")
+        await message.answer(t(lang, "newpost.custom_time_past"))
         return
 
     await _finalize(message, state, bot, publish_at, tz)
@@ -530,6 +526,7 @@ async def custom_time_entered(message: Message, state: FSMContext, bot: Bot):
 
 async def _finalize(message: Message, state: FSMContext, bot: Bot, publish_at: datetime, tz):
     data = await state.get_data()
+    lang = await get_user_lang(data["user_id"])
     link_buttons = data.get("link_buttons")
     button_json = json.dumps(link_buttons) if link_buttons else None
 
@@ -549,15 +546,13 @@ async def _finalize(message: Message, state: FSMContext, bot: Bot, publish_at: d
     channels = await db.list_channels(data["user_id"])
     names = [c["title"] for c in channels if c["id"] in set(data["selected_channels"])]
 
-    when_str = "сейчас" if publish_at <= datetime.now(tz) + timedelta(seconds=30) \
+    when_str = t(lang, "newpost.finalize_now") if publish_at <= datetime.now(tz) + timedelta(seconds=30) \
         else publish_at.strftime("%d.%m.%Y %H:%M")
 
-    text = (
-        "✅ Готово!\n\n"
-        f"Каналы: {', '.join(names)}\n"
-        f"Публикация: {when_str}\n"
-        f"Удаление: {_delete_after_label(data.get('delete_after_hours'))}\n\n"
-        "Изменить текст поста позже можно в разделе «📋 Мои посты»"
+    text = t(
+        lang, "newpost.finalize",
+        channels=", ".join(names), when=when_str,
+        delete_label=_delete_after_label(data.get("delete_after_hours"), lang),
     )
     await ui.clear_previous(bot, message.chat.id, data["user_id"])
 
@@ -572,3 +567,6 @@ async def _finalize(message: Message, state: FSMContext, bot: Bot, publish_at: d
     await ui.track(data["user_id"], sent)
     await state.clear()
 
+
+# ---------- отмена на любом шаге ----------
+# (обработчик 'cancel'/'go_home' общий, живёт в bot/handlers/common.py)

@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 
 from bot.config import BOT_TOKEN
 from bot import db
-from bot.scheduler import publisher_loop, cleaner_loop
+from bot.scheduler import publisher_loop, cleaner_loop, old_posts_cleanup_loop
 from bot.handlers import start, common, channels, edit, menu, posts
 
 logging.basicConfig(level=logging.INFO)
@@ -28,6 +28,7 @@ async def main():
 
     asyncio.create_task(publisher_loop(bot))
     asyncio.create_task(cleaner_loop(bot))
+    asyncio.create_task(old_posts_cleanup_loop())
 
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)

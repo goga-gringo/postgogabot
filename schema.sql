@@ -11,6 +11,8 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS default_delete_after_hours INT;
 -- id последнего "экранного" сообщения бота этому пользователю — чтобы удалять
 -- его перед показом нового экрана и не плодить вереницу сообщений с мёртвыми кнопками
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bot_message_id BIGINT;
+-- Язык интерфейса: 'ru' | 'en'. NULL = ещё не выбран (спросим при /start).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS language TEXT;
 
 -- Подключённые каналы (бот должен быть там админом)
 CREATE TABLE IF NOT EXISTS channels (

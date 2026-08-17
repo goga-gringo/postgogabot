@@ -51,6 +51,11 @@ async def set_user_default_delete_after(user_id: int, hours: int | None):
         )
 
 
+async def set_user_language(user_id: int, language: str):
+    async with pool().acquire() as conn:
+        await conn.execute("UPDATE users SET language = $2 WHERE id = $1", user_id, language)
+
+
 async def set_last_message_id(user_id: int, message_id: int | None):
     async with pool().acquire() as conn:
         await conn.execute(
@@ -129,6 +134,8 @@ async def update_post_text(post_id: int, text: str | None, entities_json: str | 
 
 
 async def list_user_posts(owner_id: int, limit: int = 15):
+    """Список для 'Мои посты'. Старше 30 дней не показываем — но реально их
+    к этому моменту уже нет в БД, см. purge_old_posts()."""
     async with pool().acquire() as conn:
         return await conn.fetch(
             """
@@ -139,7 +146,7 @@ async def list_user_posts(owner_id: int, limit: int = 15):
                    COUNT(*) FILTER (WHERE pt.status != 'deleted') AS active_count
             FROM posts p
             JOIN post_targets pt ON pt.post_id = p.id
-            WHERE p.owner_id = $1
+            WHERE p.owner_id = $1 AND p.created_at > now() - interval '30 days'
             GROUP BY p.id
             HAVING COUNT(*) FILTER (WHERE pt.status != 'deleted') > 0
             ORDER BY p.created_at DESC
@@ -147,6 +154,28 @@ async def list_user_posts(owner_id: int, limit: int = 15):
             """,
             owner_id, limit,
         )
+
+
+async def purge_old_posts(days: int = 30) -> int:
+    """Физически удаляет из БД посты старше N дней, у которых не осталось
+    ни одной ЗАПЛАНИРОВАННОЙ (ещё не опубликованной) цели — чтобы случайно
+    не стереть пост, запланированный далеко вперёд. Каскадом уходят и
+    post_media, и post_targets (ON DELETE CASCADE в схеме). Возвращает
+    количество удалённых постов."""
+    async with pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            DELETE FROM posts p
+            WHERE p.created_at < now() - interval '1 day' * $1
+              AND NOT EXISTS (
+                  SELECT 1 FROM post_targets pt
+                  WHERE pt.post_id = p.id AND pt.status = 'scheduled'
+              )
+            RETURNING p.id
+            """,
+            days,
+        )
+        return len(rows)
 
 
 # ---------- album items (post_media) ----------

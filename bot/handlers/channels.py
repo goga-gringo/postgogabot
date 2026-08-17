@@ -9,7 +9,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot import db
 from bot import ui
-from bot.keyboards import channels_menu_keyboard, HOME_BUTTON
+from bot.i18n import t, get_user_lang
+from bot.keyboards import channels_menu_keyboard, home_button
 
 router = Router()
 
@@ -23,22 +24,17 @@ def _generate_code() -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
 
-async def _send_add_instructions(target, tg_id: int, prefix: str = ""):
+async def _send_add_instructions(target, tg_id: int, prefix_key: str | None = None):
     code = _generate_code()
     _pending_codes[code] = {"tg_id": tg_id, "expires": time.time() + CODE_TTL_SECONDS}
     user_id = await db.get_or_create_user(tg_id)
+    lang = await get_user_lang(user_id)
     await ui.clear_previous(target.bot, target.chat.id, user_id)
+    prefix = t(lang, prefix_key) if prefix_key else ""
     b = InlineKeyboardBuilder()
-    b.row(HOME_BUTTON)
+    b.row(home_button(lang))
     sent = await target.answer(
-        prefix +
-        "Чтобы подключить канал:\n\n"
-        "1. Добавь меня в канал как администратора с правами:\n"
-        "   • Публикация сообщений\n"
-        "   • Редактирование сообщений других пользователей\n"
-        "   • Удаление сообщений\n\n"
-        f"2. Опубликуй в канале сообщение с этим кодом (я сам его удалю):\n\n<code>{code}</code>\n\n"
-        "Код действует 10 минут.",
+        t(lang, "channels.add_instructions", prefix=prefix, code=code),
         reply_markup=b.as_markup(),
     )
     await ui.track(user_id, sent)
@@ -47,12 +43,13 @@ async def _send_add_instructions(target, tg_id: int, prefix: str = ""):
 async def cmd_channels(message: Message):
     """Экран 'Мои каналы': список + удаление + добавление. Переиспользуется из /channels и из reply-меню."""
     user_id = await db.get_or_create_user(message.from_user.id)
+    lang = await get_user_lang(user_id)
     channels = await db.list_channels(user_id)
     if not channels:
-        await _send_add_instructions(message, message.from_user.id, prefix="Пока нет подключённых каналов.\n\n")
+        await _send_add_instructions(message, message.from_user.id, prefix_key="channels.no_channels")
         return
     await ui.clear_previous(message.bot, message.chat.id, user_id)
-    sent = await message.answer("Твои каналы:", reply_markup=channels_menu_keyboard(channels))
+    sent = await message.answer(t(lang, "channels.list_header"), reply_markup=channels_menu_keyboard(channels, lang))
     await ui.track(user_id, sent)
 
 
@@ -81,19 +78,20 @@ async def cb_show_add_hint(callback: CallbackQuery):
 async def cb_remove_channel(callback: CallbackQuery):
     channel_id = int(callback.data.split(":")[1])
     user_id = await db.get_or_create_user(callback.from_user.id)
+    lang = await get_user_lang(user_id)
     await db.remove_channel(user_id, channel_id)
 
     channels = await db.list_channels(user_id)
     if channels:
-        await callback.message.edit_text("Канал отключён.\n\nТвои каналы:", reply_markup=channels_menu_keyboard(channels))
+        await callback.message.edit_text(t(lang, "channels.removed"), reply_markup=channels_menu_keyboard(channels, lang))
     else:
-        await callback.message.edit_text("Канал отключён. Больше подключённых каналов нет.")
+        await callback.message.edit_text(t(lang, "channels.removed_none_left"))
     await callback.answer()
 
 
 # ---------- основной способ подключения: код, опубликованный прямо в канале ----------
 # Надёжнее пересылки: если пост в канале сам является репостом из другого канала,
-# forward_origin покажет исходный канал, а не тот, куда добавлен бот — пересылка
+# forward_origin показывает исходный канал, а не тот, куда добавлен бот — пересылка
 # в таком случае ошибочно ругается на права. Публикация в канал напрямую такой
 # проблемы не имеет: chat.id всегда правильный.
 
@@ -124,18 +122,16 @@ async def handle_channel_post(message: Message, bot: Bot):
     _pending_codes.pop(raw, None)
     tg_id = entry["tg_id"]
     user_id = await db.get_or_create_user(tg_id)
-    await db.add_channel(user_id, chat.id, chat.title or "Без названия")
+    lang = await get_user_lang(user_id)
+    await db.add_channel(user_id, chat.id, chat.title or "Untitled")
 
     try:
         await bot.delete_message(chat.id, message.message_id)
     except Exception:
         pass  # не критично, если не смогли подчистить сообщение с кодом
 
-    note = "" if can_edit else (
-        "\n⚠️ Нет права «Редактирование сообщений других пользователей» — "
-        "live-правка текста уже опубликованных постов работать не будет."
-    )
-    await bot.send_message(tg_id, f"✅ Канал «{chat.title}» подключён!{note}")
+    note = "" if can_edit else t(lang, "channels.no_edit_right")
+    await bot.send_message(tg_id, t(lang, "channels.connected", title=chat.title, note=note))
 
 
 # ---------- запасной способ: пересылка сообщения из канала ----------
@@ -147,13 +143,11 @@ async def handle_channel_post(message: Message, bot: Bot):
 
 @router.message(F.forward_origin.as_("origin"), StateFilter(None))
 async def handle_forwarded(message: Message, origin: MessageOriginChannel, bot: Bot):
+    user_id = await db.get_or_create_user(message.from_user.id)
+    lang = await get_user_lang(user_id)
+
     if origin.type != "channel":
-        await message.answer(
-            "Не могу определить исходный канал по этой пересылке "
-            "(Telegram скрывает эту информацию для репостов и части пересланных сообщений).\n\n"
-            "Пересылка вообще ненадёжна для подключения канала — используй способ через код: "
-            "«📢 Мои каналы» → «➕ Добавить канал»."
-        )
+        await message.answer(t(lang, "channels.forward_not_channel"))
         return
 
     chat = origin.chat
@@ -161,16 +155,9 @@ async def handle_forwarded(message: Message, origin: MessageOriginChannel, bot: 
         member = await bot.get_chat_member(chat.id, bot.id)
     except Exception as e:
         if "not a member" in str(e).lower() or "forbidden" in str(e).lower():
-            await message.answer(
-                "Не вижу себя участником канала «" + (chat.title or "") + "».\n\n"
-                "Если этот пост сам является репостом из другого канала — Telegram "
-                "показывает исходный канал вместо того, куда я добавлен, и пересылка "
-                "тут не сработает в принципе.\n\n"
-                "Используй способ через код: «📢 Мои каналы» → «➕ Добавить канал» — "
-                "надёжнее и не зависит от того, репост это или нет."
-            )
+            await message.answer(t(lang, "channels.forward_not_member"))
         else:
-            await message.answer(f"Не удалось проверить права в канале: {e}")
+            await message.answer(t(lang, "channels.forward_check_error", error=str(e)))
         return
 
     is_admin = member.status == "administrator"
@@ -179,19 +166,9 @@ async def handle_forwarded(message: Message, origin: MessageOriginChannel, bot: 
     can_delete = getattr(member, "can_delete_messages", False)
 
     if not is_admin or not can_post or not can_delete:
-        await message.answer(
-            "Я не администратор этого канала (или не хватает прав публикации/удаления). "
-            "Добавь мне права и перешли сообщение ещё раз."
-        )
+        await message.answer(t(lang, "channels.forward_not_admin"))
         return
 
-    if not can_edit:
-        await message.answer(
-            "⚠️ Канал подключаю, но у меня нет права «Редактирование сообщений других "
-            "пользователей» — без него не получится править текст уже опубликованных "
-            "постов через «📋 Мои посты» (публикация и автоудаление при этом будут работать)."
-        )
-
-    user_id = await db.get_or_create_user(message.from_user.id)
-    await db.add_channel(user_id, chat.id, chat.title or "Без названия")
-    await message.answer(f"✅ Канал «{chat.title}» подключён!")
+    note = "" if can_edit else t(lang, "channels.no_edit_right")
+    await db.add_channel(user_id, chat.id, chat.title or "Untitled")
+    await message.answer(t(lang, "channels.connected", title=chat.title, note=note))

@@ -4,11 +4,9 @@ from aiogram.types import Message, CallbackQuery
 
 from bot import db
 from bot import ui
+from bot.i18n import t, variants, get_user_lang
 from bot.tzutil import get_user_tz_name
-from bot.keyboards import (
-    settings_keyboard,
-    MENU_CREATE, MENU_CHANNELS, MENU_POSTS, MENU_SETTINGS,
-)
+from bot.keyboards import settings_keyboard, main_menu_keyboard
 from bot.handlers.channels import cmd_channels
 from bot.handlers.edit import cmd_myposts
 from bot.handlers.posts import start_new_post
@@ -16,40 +14,42 @@ from bot.handlers.posts import start_new_post
 router = Router()
 
 
-@router.message(F.text == MENU_CREATE)
+@router.message(F.text.in_(variants("menu.create")))
 async def menu_create(message: Message, state: FSMContext):
     await state.clear()
     await start_new_post(message, state, message.from_user.id)
 
 
-@router.message(F.text == MENU_CHANNELS)
+@router.message(F.text.in_(variants("menu.channels")))
 async def menu_channels(message: Message, state: FSMContext):
     await state.clear()
     await cmd_channels(message)
 
 
-@router.message(F.text == MENU_POSTS)
+@router.message(F.text.in_(variants("menu.posts")))
 async def menu_posts(message: Message, state: FSMContext):
     await state.clear()
     await cmd_myposts(message)
 
 
-@router.message(F.text == MENU_SETTINGS)
-async def menu_settings(message: Message, state: FSMContext):
-    await state.clear()
-    user_id = await db.get_or_create_user(message.from_user.id)
+async def _send_settings(message: Message, user_id: int):
     user = await db.get_user(user_id)
+    lang = await get_user_lang(user_id)
     tz_name = await get_user_tz_name(user_id)
     default_hours = user["default_delete_after_hours"] if user else None
     await ui.clear_previous(message.bot, message.chat.id, user_id)
     sent = await message.answer(
-        "⚙️ Настройки\n\n"
-        "Часовой пояс — используется для ручного ввода времени публикации.\n"
-        "Автоудаление по умолчанию — какая опция будет отмечена звёздочкой ⭐ "
-        "при создании поста (можно всегда выбрать другую вручную).",
-        reply_markup=settings_keyboard(tz_name, default_hours),
+        t(lang, "settings.header"),
+        reply_markup=settings_keyboard(tz_name, default_hours, lang, lang),
     )
     await ui.track(user_id, sent)
+
+
+@router.message(F.text.in_(variants("menu.settings")))
+async def menu_settings(message: Message, state: FSMContext):
+    await state.clear()
+    user_id = await db.get_or_create_user(message.from_user.id)
+    await _send_settings(message, user_id)
 
 
 @router.callback_query(F.data.startswith("tz:"))
@@ -58,10 +58,11 @@ async def cb_set_tz(callback: CallbackQuery):
     user_id = await db.get_or_create_user(callback.from_user.id)
     await db.set_user_timezone(user_id, tz_name)
 
+    lang = await get_user_lang(user_id)
     user = await db.get_user(user_id)
     default_hours = user["default_delete_after_hours"] if user else None
-    await callback.message.edit_reply_markup(reply_markup=settings_keyboard(tz_name, default_hours))
-    await callback.answer(f"Часовой пояс: {tz_name}")
+    await callback.message.edit_reply_markup(reply_markup=settings_keyboard(tz_name, default_hours, lang, lang))
+    await callback.answer(tz_name)
 
 
 @router.callback_query(F.data.startswith("defdel:"))
@@ -70,6 +71,28 @@ async def cb_set_default_delete(callback: CallbackQuery):
     user_id = await db.get_or_create_user(callback.from_user.id)
     await db.set_user_default_delete_after(user_id, hours)
 
+    lang = await get_user_lang(user_id)
     tz_name = await get_user_tz_name(user_id)
-    await callback.message.edit_reply_markup(reply_markup=settings_keyboard(tz_name, hours))
-    await callback.answer("Сохранено")
+    await callback.message.edit_reply_markup(reply_markup=settings_keyboard(tz_name, hours, lang, lang))
+    await callback.answer("✅")
+
+
+@router.callback_query(F.data.startswith("lang:"))
+async def cb_set_language(callback: CallbackQuery):
+    lang = callback.data.split(":")[1]
+    user_id = await db.get_or_create_user(callback.from_user.id)
+    await db.set_user_language(user_id, lang)
+
+    # Меняем и клавиатуру настроек (на новом языке), и reply-меню внизу —
+    # для него нужно отдельное сообщение, reply-клавиатуру нельзя просто отредактировать.
+    tz_name = await get_user_tz_name(user_id)
+    user = await db.get_user(user_id)
+    default_hours = user["default_delete_after_hours"] if user else None
+    await callback.message.edit_text(
+        t(lang, "settings.header"),
+        reply_markup=settings_keyboard(tz_name, default_hours, lang, lang),
+    )
+    await callback.bot.send_message(
+        callback.message.chat.id, t(lang, "menu.text"), reply_markup=main_menu_keyboard(lang)
+    )
+    await callback.answer("✅")

@@ -6,7 +6,7 @@ from aiogram import Bot
 from aiogram.types import InputMediaPhoto, InputMediaVideo
 
 from bot import db
-from bot.config import POLL_INTERVAL_SECONDS
+from bot.config import POLL_INTERVAL_SECONDS, POST_RETENTION_DAYS, CLEANUP_INTERVAL_SECONDS
 from bot.entities_util import deserialize_entities
 from bot.keyboards import link_buttons_only_markup
 
@@ -127,3 +127,17 @@ async def cleaner_loop(bot: Bot):
         except Exception:
             logger.exception("cleaner_loop iteration failed")
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
+
+
+async def old_posts_cleanup_loop():
+    """Периодически физически стирает из БД посты старше POST_RETENTION_DAYS
+    дней (у которых не осталось активных запланированных публикаций).
+    Каскадом удаляются и их медиа-элементы, и таргеты по каналам."""
+    while True:
+        try:
+            removed = await db.purge_old_posts(POST_RETENTION_DAYS)
+            if removed:
+                logger.info("Purged %d old post(s) (older than %d days)", removed, POST_RETENTION_DAYS)
+        except Exception:
+            logger.exception("old_posts_cleanup_loop iteration failed")
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
