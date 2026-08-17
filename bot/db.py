@@ -289,7 +289,8 @@ async def get_targets_for_post(post_id: int):
     async with pool().acquire() as conn:
         return await conn.fetch(
             """
-            SELECT pt.id AS target_id, pt.status, pt.message_ids, pt.error, c.chat_id, c.title
+            SELECT pt.id AS target_id, pt.status, pt.message_ids, pt.error, pt.publish_at,
+                   c.chat_id, c.title
             FROM post_targets pt
             JOIN channels c ON c.id = pt.channel_id
             WHERE pt.post_id = $1

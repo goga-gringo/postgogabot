@@ -10,6 +10,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot import db
 from bot import ui
 from bot.i18n import t, get_user_lang
+from bot.tzutil import get_user_tz
 from bot.states import EditPost
 from bot.entities_util import serialize_entities, deserialize_entities
 from bot.keyboards import home_button
@@ -52,6 +53,7 @@ async def show_post(callback: CallbackQuery):
     post_id = int(callback.data.split(":")[1])
     user_id = await db.get_or_create_user(callback.from_user.id)
     lang = await get_user_lang(user_id)
+    tz = await get_user_tz(user_id)
     post = await db.get_post(post_id)
     if not post or post["owner_id"] != user_id:
         await callback.answer(t(lang, "myposts.not_found"), show_alert=True)
@@ -75,6 +77,12 @@ async def show_post(callback: CallbackQuery):
     status_key = {"scheduled": "status.scheduled", "published": "status.published", "deleted": "status.deleted", "failed": "status.failed"}
     for tt in targets:
         line = f"• {html_lib.escape(tt['title'])} — {t(lang, status_key.get(tt['status'], tt['status']))}"
+        if tt["status"] == "scheduled" and tt["publish_at"]:
+            local_dt = tt["publish_at"].astimezone(tz)
+            date_str = local_dt.strftime("%d.%m.%Y")
+            time_str = local_dt.strftime("%H:%M")
+            tz_abbr = local_dt.tzname() or ""
+            line += f" ({date_str} {t(lang, 'post.at')} {time_str} ({tz_abbr}))"
         if tt["status"] == "failed" and tt["error"]:
             line += f"\n   <code>{html_lib.escape(tt['error'][:200])}</code>"
         lines.append(line)

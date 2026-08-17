@@ -163,6 +163,7 @@ T = {
     "status.published": {"ru": "опубликован", "en": "published"},
     "status.deleted": {"ru": "удалён", "en": "deleted"},
     "status.failed": {"ru": "ошибка", "en": "failed"},
+    "post.at": {"ru": "в", "en": "at"},
 
     "edittext.hint_media": {
         "ru": "Только медиа-подпись, само фото/видео менять нельзя.",
