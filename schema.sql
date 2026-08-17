@@ -82,3 +82,36 @@ CREATE INDEX IF NOT EXISTS idx_targets_pending_publish
 
 CREATE INDEX IF NOT EXISTS idx_targets_pending_delete
     ON post_targets (delete_at) WHERE status = 'published' AND delete_at IS NOT NULL;
+
+-- Рассылка /post_all — один пост, отправленный ЛИЧНО каждому пользователю бота
+-- (не в канал). text без HTML, форматирование — через entities_json, как и
+-- обычные посты. delete_after_hours = NULL значит "навсегда" (/post_all).
+CREATE TABLE IF NOT EXISTS broadcasts (
+    id BIGSERIAL PRIMARY KEY,
+    admin_tg_id BIGINT NOT NULL,
+    text TEXT,
+    entities_json TEXT,
+    media_type TEXT,           -- 'text' | 'photo' | 'video'
+    file_id TEXT,
+    delete_after_hours INT,    -- NULL = никогда не удалять
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Один получатель рассылки — своя запись, свой message_id, свой таймер удаления
+CREATE TABLE IF NOT EXISTS broadcast_targets (
+    id BIGSERIAL PRIMARY KEY,
+    broadcast_id BIGINT NOT NULL REFERENCES broadcasts(id) ON DELETE CASCADE,
+    user_tg_id BIGINT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending | sent | failed | deleted
+    message_id BIGINT,
+    sent_at TIMESTAMPTZ,
+    delete_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ,
+    error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_broadcast_targets_pending
+    ON broadcast_targets (broadcast_id) WHERE status = 'pending';
+
+CREATE INDEX IF NOT EXISTS idx_broadcast_targets_pending_delete
+    ON broadcast_targets (delete_at) WHERE status = 'sent' AND delete_at IS NOT NULL;

@@ -36,3 +36,10 @@ POST_RETENTION_DAYS = int(os.environ.get("POST_RETENTION_DAYS", "30"))
 # раз в несколько часов достаточно
 CLEANUP_INTERVAL_SECONDS = int(os.environ.get("CLEANUP_INTERVAL_SECONDS", str(6 * 3600)))
 
+# Telegram ID тех, кому разрешено рассылать /post_all всем пользователям бота.
+# Через запятую, например "123456789,987654321". Пусто = никому не разрешено
+# (безопасный дефолт — нужно явно указать себя).
+ADMIN_TG_IDS = {
+    int(x.strip()) for x in os.environ.get("ADMIN_TG_IDS", "").split(",") if x.strip()
+}
+

@@ -129,6 +129,27 @@ async def cleaner_loop(bot: Bot):
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
 
+async def broadcast_cleaner_loop(bot: Bot):
+    """Автоудаление сообщений рассылки (/post_all_24 и т.п.) — та же логика,
+    что и cleaner_loop, только получатели личные чаты, а не каналы."""
+    while True:
+        try:
+            due = await db.fetch_broadcast_targets_due_to_delete()
+            for row in due:
+                if row["message_id"]:
+                    try:
+                        await bot.delete_message(row["user_tg_id"], row["message_id"])
+                    except Exception as e:
+                        logger.warning(
+                            "Broadcast delete failed for target %s user %s: %s",
+                            row["target_id"], row["user_tg_id"], e,
+                        )
+                await db.mark_broadcast_deleted(row["target_id"])
+        except Exception:
+            logger.exception("broadcast_cleaner_loop iteration failed")
+        await asyncio.sleep(POLL_INTERVAL_SECONDS)
+
+
 async def old_posts_cleanup_loop():
     """Периодически физически стирает из БД посты старше POST_RETENTION_DAYS
     дней (у которых не осталось активных запланированных публикаций).

@@ -298,3 +298,100 @@ async def get_targets_for_post(post_id: int):
             """,
             post_id,
         )
+
+
+# ---------- рассылка /post_all ----------
+
+async def count_users() -> int:
+    async with pool().acquire() as conn:
+        row = await conn.fetchrow("SELECT COUNT(*) AS c FROM users")
+        return row["c"]
+
+
+async def get_all_user_tg_ids() -> list[int]:
+    async with pool().acquire() as conn:
+        rows = await conn.fetch("SELECT tg_id FROM users")
+        return [r["tg_id"] for r in rows]
+
+
+async def create_broadcast(
+    admin_tg_id: int, text: str | None, entities_json: str | None,
+    media_type: str, file_id: str | None, delete_after_hours: int | None,
+) -> int:
+    async with pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO broadcasts (admin_tg_id, text, entities_json, media_type, file_id, delete_after_hours)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id
+            """,
+            admin_tg_id, text, entities_json, media_type, file_id, delete_after_hours,
+        )
+        return row["id"]
+
+
+async def create_broadcast_targets(broadcast_id: int, tg_ids: list[int]):
+    async with pool().acquire() as conn:
+        async with conn.transaction():
+            for tg_id in tg_ids:
+                await conn.execute(
+                    "INSERT INTO broadcast_targets (broadcast_id, user_tg_id) VALUES ($1, $2)",
+                    broadcast_id, tg_id,
+                )
+
+
+async def get_pending_broadcast_targets(broadcast_id: int):
+    async with pool().acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT id AS target_id, user_tg_id FROM broadcast_targets
+            WHERE broadcast_id = $1 AND status = 'pending'
+            ORDER BY id
+            """,
+            broadcast_id,
+        )
+
+
+async def mark_broadcast_sent(target_id: int, message_id: int, delete_after_hours: int | None):
+    async with pool().acquire() as conn:
+        if delete_after_hours:
+            await conn.execute(
+                """
+                UPDATE broadcast_targets
+                SET status = 'sent', message_id = $2, sent_at = now(),
+                    delete_at = now() + ($3 * INTERVAL '1 hour')
+                WHERE id = $1
+                """,
+                target_id, message_id, delete_after_hours,
+            )
+        else:
+            await conn.execute(
+                "UPDATE broadcast_targets SET status = 'sent', message_id = $2, sent_at = now() WHERE id = $1",
+                target_id, message_id,
+            )
+
+
+async def mark_broadcast_failed(target_id: int, error: str):
+    async with pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE broadcast_targets SET status = 'failed', error = $2 WHERE id = $1",
+            target_id, error[:500],
+        )
+
+
+async def fetch_broadcast_targets_due_to_delete():
+    async with pool().acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT id AS target_id, user_tg_id, message_id FROM broadcast_targets
+            WHERE status = 'sent' AND delete_at IS NOT NULL AND delete_at <= now()
+            """
+        )
+
+
+async def mark_broadcast_deleted(target_id: int):
+    async with pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE broadcast_targets SET status = 'deleted', deleted_at = now() WHERE id = $1",
+            target_id,
+        )
