@@ -410,21 +410,15 @@ async def _return_to_preview(bot: Bot, chat_id: int, state: FSMContext, data: di
 @router.callback_query(NewPost.choosing_time, F.data == "toggle_silent")
 async def toggle_silent(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    lang = await get_user_lang(data["user_id"])
     silent = not data.get("silent", False)
     await state.update_data(silent=silent)
+    data = await state.get_data()
 
-    preview_id = data.get("preview_message_id")
-    allow_link_buttons = data["media_type"] != "album"
-    kb = preview_keyboard(data.get("link_buttons"), allow_link_buttons, lang, silent)
-    if preview_id:
-        try:
-            await callback.bot.edit_message_reply_markup(
-                callback.message.chat.id, preview_id, reply_markup=kb
-            )
-        except Exception:
-            pass
-    await callback.answer(t(lang, "btn.silent_on" if not silent else "btn.silent_off"))
+    # Тот же надёжный паттерн, что и у 'назад'/кнопок-ссылок: убираем старый
+    # предпросмотр и шлём свежий — тихое редактирование клавиатуры на месте
+    # у нас в проекте нестабильно (уже сталкивались с этим раньше).
+    await _return_to_preview(callback.bot, callback.message.chat.id, state, data, callback.message)
+    await callback.answer()
 
 
 # ---------- кнопки-ссылки под постом ----------
