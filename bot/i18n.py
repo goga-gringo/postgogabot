@@ -34,6 +34,8 @@ T = {
     "btn.back_short": {"ru": "⬅️ Назад", "en": "⬅️ Back"},
     "btn.lang_ru": {"ru": "🇷🇺 Русский", "en": "🇷🇺 Russian"},
     "btn.lang_en": {"ru": "🇬🇧 English", "en": "🇬🇧 English"},
+    "btn.silent_off": {"ru": "🔕 Без звука", "en": "🔕 Silent"},
+    "btn.silent_on": {"ru": "🔔 Со звуком", "en": "🔔 With sound"},
 
     # ---------- /start ----------
     "start.choose_language": {
@@ -261,18 +263,22 @@ T = {
             "✅ Готово!\n\n"
             "Каналы: {channels}\n"
             "Публикация: {when}\n"
-            "Удаление: {delete_label}\n\n"
+            "Удаление: {delete_label}\n"
+            "Звук: {sound_label}\n\n"
             "Изменить текст поста позже можно в разделе «📋 Мои посты»"
         ),
         "en": (
             "✅ Done!\n\n"
             "Channels: {channels}\n"
             "Publishing: {when}\n"
-            "Auto-delete: {delete_label}\n\n"
+            "Auto-delete: {delete_label}\n"
+            "Sound: {sound_label}\n\n"
             "You can edit the post text later in \u00ab📋 My posts\u00bb"
         ),
     },
     "newpost.finalize_now": {"ru": "сейчас", "en": "now"},
+    "newpost.sound_off": {"ru": "выключен (без уведомления)", "en": "off (no notification)"},
+    "newpost.sound_on": {"ru": "включён", "en": "on"},
 
     # ---------- настройки ----------
     "settings.header": {

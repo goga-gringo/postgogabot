@@ -357,8 +357,9 @@ async def _send_preview(message: Message, data: dict, state: FSMContext):
     text = data.get("text")
     entities = deserialize_entities(data.get("entities_json"))
     link_buttons = data.get("link_buttons")
+    silent = data.get("silent", False)
     allow_link_buttons = media_type != "album"  # Telegram не поддерживает reply_markup в альбомах
-    kb = preview_keyboard(link_buttons, allow_link_buttons, lang)
+    kb = preview_keyboard(link_buttons, allow_link_buttons, lang, silent)
 
     if media_type == "photo":
         sent = await message.answer_photo(
@@ -404,6 +405,26 @@ async def _return_to_preview(bot: Bot, chat_id: int, state: FSMContext, data: di
 
     data = await state.get_data()
     await _send_preview(trigger_message, data, state)
+
+
+@router.callback_query(NewPost.choosing_time, F.data == "toggle_silent")
+async def toggle_silent(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    lang = await get_user_lang(data["user_id"])
+    silent = not data.get("silent", False)
+    await state.update_data(silent=silent)
+
+    preview_id = data.get("preview_message_id")
+    allow_link_buttons = data["media_type"] != "album"
+    kb = preview_keyboard(data.get("link_buttons"), allow_link_buttons, lang, silent)
+    if preview_id:
+        try:
+            await callback.bot.edit_message_reply_markup(
+                callback.message.chat.id, preview_id, reply_markup=kb
+            )
+        except Exception:
+            pass
+    await callback.answer(t(lang, "btn.silent_on" if not silent else "btn.silent_off"))
 
 
 # ---------- кнопки-ссылки под постом ----------
@@ -529,11 +550,12 @@ async def _finalize(message: Message, state: FSMContext, bot: Bot, publish_at: d
     lang = await get_user_lang(data["user_id"])
     link_buttons = data.get("link_buttons")
     button_json = json.dumps(link_buttons) if link_buttons else None
+    silent = data.get("silent", False)
 
     post_id = await db.create_post(
         data["user_id"], data.get("text"), data["media_type"], data.get("file_id"),
         data.get("entities_json"), data.get("source_chat_id"), data.get("source_message_ids"),
-        button_json,
+        button_json, silent,
     )
 
     if data["media_type"] == "album" and data.get("album_items"):
@@ -553,6 +575,7 @@ async def _finalize(message: Message, state: FSMContext, bot: Bot, publish_at: d
         lang, "newpost.finalize",
         channels=", ".join(names), when=when_str,
         delete_label=_delete_after_label(data.get("delete_after_hours"), lang),
+        sound_label=t(lang, "newpost.sound_off" if silent else "newpost.sound_on"),
     )
     await ui.clear_previous(bot, message.chat.id, data["user_id"])
 
