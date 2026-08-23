@@ -110,7 +110,22 @@ async def _delete_one(bot: Bot, row):
         except Exception as e:
             # Сообщение могло быть уже удалено вручную — это не критично
             logger.warning("Delete failed for target %s msg %s: %s", row["target_id"], message_id, e)
+
+        if row["delete_from_comments"]:
+            await _delete_comment_mirror(bot, row["chat_id"], message_id)
+
     await db.mark_deleted(row["target_id"])
+
+
+async def _delete_comment_mirror(bot: Bot, channel_chat_id: int, channel_message_id: int):
+    """Если у поста есть эхо в привязанной группе комментариев — удаляем и его."""
+    mirror = await db.get_comment_mirror(channel_chat_id, channel_message_id)
+    if not mirror:
+        return
+    try:
+        await bot.delete_message(mirror["group_chat_id"], mirror["group_message_id"])
+    except Exception as e:
+        logger.warning("Comment mirror delete failed for channel msg %s: %s", channel_message_id, e)
 
 
 async def publisher_loop(bot: Bot):

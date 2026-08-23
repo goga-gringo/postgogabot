@@ -36,6 +36,10 @@ T = {
     "btn.lang_en": {"ru": "🇬🇧 English", "en": "🇬🇧 English"},
     "btn.silent_off": {"ru": "🔕 Без звука", "en": "🔕 Silent"},
     "btn.silent_on": {"ru": "🔔 Со звуком", "en": "🔔 With sound"},
+    "btn.delete_from_comments": {
+        "ru": "Удалить из комментариев",
+        "en": "Delete from comments",
+    },
 
     # ---------- /start ----------
     "start.choose_language": {

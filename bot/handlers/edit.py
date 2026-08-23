@@ -14,6 +14,7 @@ from bot.tzutil import get_user_tz
 from bot.states import EditPost
 from bot.entities_util import serialize_entities, deserialize_entities
 from bot.keyboards import home_button
+from bot.scheduler import _delete_comment_mirror
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -161,6 +162,7 @@ async def apply_new_text(message: Message, state: FSMContext, bot: Bot):
         reply += t(lang, "edittext.failed", failed=failed, errors="\n".join(errors[:5]))
     reply += t(lang, "edittext.scheduled_note")
 
+    await ui.delete_user_message(message)
     await ui.clear_previous(bot, message.chat.id, user_id)
     sent = await message.answer(reply)
     await ui.track(user_id, sent)
@@ -229,6 +231,10 @@ async def delete_one(callback: CallbackQuery):
 
 async def _delete_targets(callback: CallbackQuery, post_id: int, target_ids: list[int], lang: str):
     bot = callback.bot
+    user_id = await db.get_or_create_user(callback.from_user.id)
+    user = await db.get_user(user_id)
+    delete_from_comments = bool(user and user["delete_from_comments"])
+
     targets = await db.get_targets_for_post(post_id)
     by_id = {tt["target_id"]: tt for tt in targets}
 
@@ -243,6 +249,8 @@ async def _delete_targets(callback: CallbackQuery, post_id: int, target_ids: lis
                     await bot.delete_message(tt["chat_id"], mid)
                 except Exception as e:
                     logger.warning("Manual delete failed target %s msg %s: %s", tid, mid, e)
+                if delete_from_comments:
+                    await _delete_comment_mirror(bot, tt["chat_id"], mid)
         await db.mark_deleted(tid)
         removed += 1
 

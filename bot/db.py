@@ -51,6 +51,32 @@ async def set_user_default_delete_after(user_id: int, hours: int | None):
         )
 
 
+async def set_user_delete_from_comments(user_id: int, enabled: bool):
+    async with pool().acquire() as conn:
+        await conn.execute("UPDATE users SET delete_from_comments = $2 WHERE id = $1", user_id, enabled)
+
+
+async def save_comment_mirror(channel_chat_id: int, channel_message_id: int, group_chat_id: int, group_message_id: int):
+    async with pool().acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO comment_mirrors (channel_chat_id, channel_message_id, group_chat_id, group_message_id)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (channel_chat_id, channel_message_id)
+            DO UPDATE SET group_chat_id = EXCLUDED.group_chat_id, group_message_id = EXCLUDED.group_message_id
+            """,
+            channel_chat_id, channel_message_id, group_chat_id, group_message_id,
+        )
+
+
+async def get_comment_mirror(channel_chat_id: int, channel_message_id: int):
+    async with pool().acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT group_chat_id, group_message_id FROM comment_mirrors WHERE channel_chat_id = $1 AND channel_message_id = $2",
+            channel_chat_id, channel_message_id,
+        )
+
+
 async def set_user_language(user_id: int, language: str):
     async with pool().acquire() as conn:
         await conn.execute("UPDATE users SET language = $2 WHERE id = $1", user_id, language)
@@ -268,9 +294,11 @@ async def fetch_due_to_delete():
     async with pool().acquire() as conn:
         return await conn.fetch(
             """
-            SELECT pt.id AS target_id, pt.message_ids, c.chat_id
+            SELECT pt.id AS target_id, pt.message_ids, c.chat_id, u.delete_from_comments
             FROM post_targets pt
             JOIN channels c ON c.id = pt.channel_id
+            JOIN posts p ON p.id = pt.post_id
+            JOIN users u ON u.id = p.owner_id
             WHERE pt.status = 'published'
               AND pt.delete_at IS NOT NULL
               AND pt.delete_at <= now()

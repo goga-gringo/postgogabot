@@ -105,7 +105,10 @@ def channels_menu_keyboard(channels, lang: str = DEFAULT_LANG) -> InlineKeyboard
     return b.as_markup()
 
 
-def settings_keyboard(current_tz: str, current_default_hours: int | None, current_lang: str, lang: str = DEFAULT_LANG) -> InlineKeyboardMarkup:
+def settings_keyboard(
+    current_tz: str, current_default_hours: int | None, current_lang: str,
+    delete_from_comments: bool = False, lang: str = DEFAULT_LANG,
+) -> InlineKeyboardMarkup:
     from bot.tzutil import COMMON_TIMEZONES
 
     b = InlineKeyboardBuilder()
@@ -131,6 +134,12 @@ def settings_keyboard(current_tz: str, current_default_hours: int | None, curren
     never_mark = "✅ " if not current_default_hours else "◻️ "
     b.button(text=f"{never_mark}{t(lang, 'btn.default_never')}", callback_data="defdel:0")
     b.adjust(1)
+
+    comments_mark = "✅ " if delete_from_comments else "◻️ "
+    b.row(InlineKeyboardButton(
+        text=f"{comments_mark}{t(lang, 'btn.delete_from_comments')}", callback_data="toggle_comments"
+    ))
+
     b.row(home_button(lang))
 
     return b.as_markup()

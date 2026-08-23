@@ -25,3 +25,14 @@ async def clear_previous(bot: Bot, chat_id: int, user_id: int):
 async def track(user_id: int, message: Message):
     """Запоминаем id только что отправленного 'экранного' сообщения."""
     await db.set_last_message_id(user_id, message.message_id)
+
+
+async def delete_user_message(message: Message):
+    """Удаляет сообщение, которое прислал сам пользователь (контент поста,
+    нажатие reply-кнопки, ввод текста и т.п.) — после того как бот его уже
+    обработал. Боты могут удалять входящие сообщения в личных чатах (это
+    штатно разрешено Bot API), поэтому работает без специальных прав."""
+    try:
+        await message.delete()
+    except Exception as e:
+        logger.debug("Could not delete user message %s: %s", message.message_id, e)

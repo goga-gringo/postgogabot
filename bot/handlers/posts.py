@@ -460,6 +460,7 @@ async def receive_link_buttons(message: Message, state: FSMContext):
 
     await state.update_data(link_buttons=rows)
     data = await state.get_data()
+    await ui.delete_user_message(message)
     await _return_to_preview(message.bot, message.chat.id, state, data, message)
 
 
@@ -534,6 +535,7 @@ async def custom_time_entered(message: Message, state: FSMContext, bot: Bot):
         await message.answer(t(lang, "newpost.custom_time_past"))
         return
 
+    await ui.delete_user_message(message)
     await _finalize(message, state, bot, publish_at, tz)
 
 

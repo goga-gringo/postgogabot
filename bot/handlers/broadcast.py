@@ -9,6 +9,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot import db
+from bot import ui
 from bot.config import ADMIN_TG_IDS
 from bot.entities_util import serialize_entities, deserialize_entities
 
@@ -48,6 +49,7 @@ async def cmd_post_all(message: Message, state: FSMContext):
     await state.set_state(Broadcast.waiting_content)
 
     count = await db.count_users()
+    await ui.delete_user_message(message)
     await message.answer(
         f"📣 Режим рассылки всем пользователям бота ({count} чел.)\n"
         f"Автоудаление: {_delete_label(hours)}\n\n"
@@ -70,6 +72,7 @@ async def receive_broadcast_content(message: Message, state: FSMContext):
 
     await state.update_data(media_type=media_type, file_id=file_id, text=text, entities_json=entities_json)
     await state.set_state(Broadcast.confirming)
+    await ui.delete_user_message(message)
 
     data = await state.get_data()
     count = await db.count_users()

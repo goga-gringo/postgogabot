@@ -8,6 +8,9 @@ CREATE TABLE IF NOT EXISTS users (
 -- Персональные настройки пользователя (необязательные, есть дефолты в коде)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS default_delete_after_hours INT;
+-- Если включено — при удалении поста из канала бот попробует найти и удалить
+-- и его "эхо" в привязанной группе комментариев (см. comment_mirrors ниже)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS delete_from_comments BOOLEAN NOT NULL DEFAULT false;
 -- id последнего "экранного" сообщения бота этому пользователю — чтобы удалять
 -- его перед показом нового экрана и не плодить вереницу сообщений с мёртвыми кнопками
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bot_message_id BIGINT;
@@ -117,3 +120,16 @@ CREATE INDEX IF NOT EXISTS idx_broadcast_targets_pending
 
 CREATE INDEX IF NOT EXISTS idx_broadcast_targets_pending_delete
     ON broadcast_targets (delete_at) WHERE status = 'sent' AND delete_at IS NOT NULL;
+
+-- Связь "пост в канале" <-> "его авто-эхо в привязанной группе комментариев".
+-- Telegram сам не удаляет комментарий из группы при удалении поста в канале —
+-- это нужно делать отдельно, зная message_id обеих сторон.
+CREATE TABLE IF NOT EXISTS comment_mirrors (
+    id BIGSERIAL PRIMARY KEY,
+    channel_chat_id BIGINT NOT NULL,
+    channel_message_id BIGINT NOT NULL,
+    group_chat_id BIGINT NOT NULL,
+    group_message_id BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (channel_chat_id, channel_message_id)
+);

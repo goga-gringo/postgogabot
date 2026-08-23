@@ -141,7 +141,7 @@ async def handle_channel_post(message: Message, bot: Bot):
 # обработчик не должен перехватывать сообщение — оно должно уйти в приём
 # контента поста (posts.py).
 
-@router.message(F.forward_origin.as_("origin"), StateFilter(None))
+@router.message(F.forward_origin.as_("origin"), F.chat.type == "private", StateFilter(None))
 async def handle_forwarded(message: Message, origin: MessageOriginChannel, bot: Bot):
     user_id = await db.get_or_create_user(message.from_user.id)
     lang = await get_user_lang(user_id)
@@ -171,4 +171,19 @@ async def handle_forwarded(message: Message, origin: MessageOriginChannel, bot: 
 
     note = "" if can_edit else t(lang, "channels.no_edit_right")
     await db.add_channel(user_id, chat.id, chat.title or "Untitled")
+    await ui.delete_user_message(message)
     await message.answer(t(lang, "channels.connected", title=chat.title, note=note))
+
+
+# ---------- отслеживание "эхо" постов в привязанной группе комментариев ----------
+# Когда у канала есть привязанная группа обсуждений, каждый пост канала Telegram
+# сам публикует туда "эхом" — с флагом is_automatic_forward. Чтобы потом уметь
+# удалить и этот эхо-пост при удалении оригинала (опция в Настройках), запоминаем
+# связь. Для этого бот должен быть добавлен ещё и в саму группу (не только в канал).
+
+@router.message(F.is_automatic_forward)
+async def track_comment_mirror(message: Message):
+    origin = message.forward_origin
+    if not origin or origin.type != "channel":
+        return
+    await db.save_comment_mirror(origin.chat.id, origin.message_id, message.chat.id, message.message_id)

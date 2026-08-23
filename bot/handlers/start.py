@@ -30,6 +30,7 @@ async def _send_welcome(bot, chat_id: int, lang: str):
 async def cmd_start(message: Message):
     user_id = await db.get_or_create_user(message.from_user.id)
     await ui.clear_previous(message.bot, message.chat.id, user_id)
+    await ui.delete_user_message(message)
 
     user = await db.get_user(user_id)
     if not user or not user["language"]:
@@ -60,4 +61,5 @@ async def cmd_cancel(message: Message, state: FSMContext):
     await state.clear()
     user_id = await db.get_or_create_user(message.from_user.id)
     lang = await get_user_lang(user_id)
+    await ui.delete_user_message(message)
     await message.answer(t(lang, "start.cancelled"))
