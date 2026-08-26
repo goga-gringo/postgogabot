@@ -56,6 +56,25 @@ async def set_user_delete_from_comments(user_id: int, enabled: bool):
         await conn.execute("UPDATE users SET delete_from_comments = $2 WHERE id = $1", user_id, enabled)
 
 
+async def add_recent_custom_time(user_id: int, value: str):
+    """Запоминаем сырую строку даты/времени, которую пользователь ввёл вручную —
+    храним последние 3 (без дублей), самая свежая первой."""
+    async with pool().acquire() as conn:
+        row = await conn.fetchrow("SELECT recent_custom_times FROM users WHERE id = $1", user_id)
+        current = list(row["recent_custom_times"] or []) if row else []
+        if value in current:
+            current.remove(value)
+        current.insert(0, value)
+        current = current[:3]
+        await conn.execute("UPDATE users SET recent_custom_times = $2 WHERE id = $1", user_id, current)
+
+
+async def get_recent_custom_times(user_id: int) -> list[str]:
+    async with pool().acquire() as conn:
+        row = await conn.fetchrow("SELECT recent_custom_times FROM users WHERE id = $1", user_id)
+        return list(row["recent_custom_times"] or []) if row else []
+
+
 async def save_comment_mirror(channel_chat_id: int, channel_message_id: int, group_chat_id: int, group_message_id: int):
     async with pool().acquire() as conn:
         await conn.execute(

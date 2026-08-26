@@ -16,6 +16,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS delete_from_comments BOOLEAN NOT NULL
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bot_message_id BIGINT;
 -- Язык интерфейса: 'ru' | 'en'. NULL = ещё не выбран (спросим при /start).
 ALTER TABLE users ADD COLUMN IF NOT EXISTS language TEXT;
+-- Последние 3 вручную введённые даты/времени публикации (сырой текст, как
+-- ввёл пользователь) — показываем как быстрые варианты при следующем вводе.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS recent_custom_times TEXT[];
 
 -- Подключённые каналы (бот должен быть там админом)
 CREATE TABLE IF NOT EXISTS channels (

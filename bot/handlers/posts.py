@@ -33,6 +33,17 @@ def _delete_after_label(hours: int | None, lang: str) -> str:
     return t(lang, "newpost.delete_never") if not hours else t(lang, "newpost.delete_in_hours", h=hours)
 
 
+def _build_custom_time_prompt(lang: str, tz_name: str, recent: list[str]) -> str:
+    parts = [t(lang, "newpost.custom_time_prompt")]
+    if recent:
+        parts.append(t(lang, "newpost.custom_time_recent_header"))
+        parts.append("")
+        parts.extend(f"<code>{html.escape(r)}</code>" for r in recent)
+        parts.append("")
+    parts.append(t(lang, "newpost.custom_time_tz_line", tz=tz_name))
+    return "\n".join(parts)
+
+
 def parse_link_buttons(text: str):
     """'Текст - ссылка' построчно, несколько кнопок в строке через '|'.
     Если ссылка без схемы (например t.me/...) — подставляем https:// сама.
@@ -410,14 +421,13 @@ async def _return_to_preview(bot: Bot, chat_id: int, state: FSMContext, data: di
 @router.callback_query(NewPost.choosing_time, F.data == "toggle_silent")
 async def toggle_silent(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    lang = await get_user_lang(data["user_id"])
     silent = not data.get("silent", False)
     await state.update_data(silent=silent)
-    data = await state.get_data()
 
-    # Тот же надёжный паттерн, что и у 'назад'/кнопок-ссылок: убираем старый
-    # предпросмотр и шлём свежий — тихое редактирование клавиатуры на месте
-    # у нас в проекте нестабильно (уже сталкивались с этим раньше).
-    await _return_to_preview(callback.bot, callback.message.chat.id, state, data, callback.message)
+    allow_link_buttons = data["media_type"] != "album"
+    kb = preview_keyboard(data.get("link_buttons"), allow_link_buttons, lang, silent)
+    await callback.message.edit_reply_markup(reply_markup=kb)
     await callback.answer()
 
 
@@ -493,7 +503,7 @@ async def choose_when(callback: CallbackQuery, state: FSMContext, bot: Bot):
                 pass
 
         sent = await callback.message.answer(
-            t(lang, "newpost.custom_time_prompt", tz=tz_name),
+            _build_custom_time_prompt(lang, tz_name, await db.get_recent_custom_times(data["user_id"])),
             reply_markup=back_only_keyboard(lang),
         )
         await ui.track(data["user_id"], sent)
@@ -535,6 +545,7 @@ async def custom_time_entered(message: Message, state: FSMContext, bot: Bot):
         await message.answer(t(lang, "newpost.custom_time_past"))
         return
 
+    await db.add_recent_custom_time(data["user_id"], message.text.strip())
     await ui.delete_user_message(message)
     await _finalize(message, state, bot, publish_at, tz)
 

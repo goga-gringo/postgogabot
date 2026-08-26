@@ -234,8 +234,13 @@ T = {
         "en": "👆 This is how the album will look (Telegram doesn't support buttons under albums).\nWhen do we publish?",
     },
     "newpost.custom_time_prompt": {
-        "ru": "Напиши дату и время публикации в формате:\n<code>31.12.2026 15:30</code>\n\nЧасовой пояс: {tz} (поменять — в ⚙️ Настройках)",
-        "en": "Send the publish date and time as:\n<code>31.12.2026 15:30</code>\n\nTimezone: {tz} (change it in ⚙️ Settings)",
+        "ru": "Напиши дату и время публикации в формате:\n<code>31.12.2026 15:30</code>",
+        "en": "Send the publish date and time as:\n<code>31.12.2026 15:30</code>",
+    },
+    "newpost.custom_time_recent_header": {"ru": "Ваши варианты:", "en": "Your recent picks:"},
+    "newpost.custom_time_tz_line": {
+        "ru": "Часовой пояс: {tz} (поменять — в ⚙️ Настройках)",
+        "en": "Timezone: {tz} (change it in ⚙️ Settings)",
     },
     "newpost.custom_time_bad_format": {"ru": "Не понял формат. Пример: 31.12.2026 15:30", "en": "Didn't understand the format. Example: 31.12.2026 15:30"},
     "newpost.custom_time_past": {"ru": "Это время уже в прошлом. Введи время в будущем.", "en": "That time is already in the past. Enter a future time."},
