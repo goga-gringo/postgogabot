@@ -37,6 +37,7 @@ def _plain_preview(text: str | None, lang: str, length: int = 40) -> str:
 async def cmd_myposts(message: Message):
     user_id = await db.get_or_create_user(message.from_user.id)
     lang = await get_user_lang(user_id)
+    tz = await get_user_tz(user_id)
     posts = await db.list_user_posts(user_id)
     await ui.clear_previous(message.bot, message.chat.id, user_id)
     if not posts:
@@ -47,13 +48,14 @@ async def cmd_myposts(message: Message):
     b = InlineKeyboardBuilder()
     for p in posts:
         preview = _plain_preview(p["text"], lang)
+        date_str = p["created_at"].astimezone(tz).strftime("%d.%m %H:%M")
         if p["scheduled_count"] > 0:
             status_emoji = "⏰"
         elif p["published_count"] > 0:
             status_emoji = "✅"
         else:
             status_emoji = "⚠️"
-        b.button(text=f"{status_emoji} {preview}", callback_data=f"editpost:{p['id']}")
+        b.button(text=f"{date_str} {status_emoji} {preview}", callback_data=f"editpost:{p['id']}")
     b.adjust(1)
     b.row(home_button(lang))
     sent = await message.answer(t(lang, "myposts.header"), reply_markup=b.as_markup())
@@ -127,14 +129,26 @@ async def _render_post(bot: Bot, chat_id: int, user_id: int, post_id: int, lang:
         await ui.track(user_id, sent)
         return True
 
-    if post["media_type"] == "photo":
-        caption = text if len(text) <= CAPTION_LIMIT else text[:CAPTION_LIMIT] + "…"
-        sent = await bot.send_photo(chat_id, post["file_id"], caption=caption, parse_mode="HTML", reply_markup=kb)
-    elif post["media_type"] == "video":
-        caption = text if len(text) <= CAPTION_LIMIT else text[:CAPTION_LIMIT] + "…"
-        sent = await bot.send_video(chat_id, post["file_id"], caption=caption, parse_mode="HTML", reply_markup=kb)
-    else:
-        sent = await bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+    caption = text if len(text) <= CAPTION_LIMIT else text[:CAPTION_LIMIT] + "…"
+    sent = None
+    try:
+        if post["media_type"] == "photo":
+            sent = await bot.send_photo(chat_id, post["file_id"], caption=caption, parse_mode="HTML", reply_markup=kb)
+        elif post["media_type"] == "video":
+            sent = await bot.send_video(chat_id, post["file_id"], caption=caption, parse_mode="HTML", reply_markup=kb)
+        else:
+            sent = await bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+    except Exception as e:
+        logger.exception("Failed to render post %s (media_type=%s) for user %s: %s", post_id, post["media_type"], user_id, e)
+
+    if sent is None:
+        # Медиа (или даже сам текст) не отправился — не оставляем пользователя
+        # совсем без ответа, показываем хотя бы голый текст без разметки/медиа.
+        try:
+            sent = await bot.send_message(chat_id, html_lib.escape(text)[:3900], reply_markup=kb)
+        except Exception as e:
+            logger.exception("Fallback render also failed for post %s: %s", post_id, e)
+            return False
 
     await ui.track(user_id, sent)
     return True
@@ -146,7 +160,13 @@ async def show_post(callback: CallbackQuery):
     user_id = await db.get_or_create_user(callback.from_user.id)
     lang = await get_user_lang(user_id)
 
-    ok = await _render_post(callback.bot, callback.message.chat.id, user_id, post_id, lang)
+    try:
+        ok = await _render_post(callback.bot, callback.message.chat.id, user_id, post_id, lang)
+    except Exception as e:
+        logger.exception("show_post crashed for post %s user %s: %s", post_id, user_id, e)
+        await callback.answer("⚠️ Ошибка при отображении поста, попробуй ещё раз", show_alert=True)
+        return
+
     if not ok:
         await callback.answer(t(lang, "myposts.not_found"), show_alert=True)
         return
