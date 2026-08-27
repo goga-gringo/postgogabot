@@ -192,9 +192,27 @@ async def update_post_media(post_id: int, file_id: str, media_type: str):
         )
 
 
+async def replace_album_items(post_id: int, items: list[dict]):
+    """Полная замена элементов альбома (для 'Заменить медиа' у поста-альбома)."""
+    async with pool().acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("DELETE FROM post_media WHERE post_id = $1", post_id)
+            for position, item in enumerate(items):
+                await conn.execute(
+                    """
+                    INSERT INTO post_media (post_id, position, media_type, file_id)
+                    VALUES ($1, $2, $3, $4)
+                    """,
+                    post_id, position, item["type"], item["file_id"],
+                )
+            await conn.execute("UPDATE posts SET media_edited = true WHERE id = $1", post_id)
+
+
 async def list_user_posts(owner_id: int, limit: int = 15):
-    """Список для 'Мои посты'. Старше 30 дней не показываем — но реально их
-    к этому моменту уже нет в БД, см. purge_old_posts()."""
+    """Список для 'Мои посты'. Скрываем старше 30 дней, НО не скрываем,
+    если у поста ещё осталась запланированная (не вышедшая) цель — иначе
+    пост, запланированный далеко вперёд, пропадал бы из списка раньше,
+    чем реально выйдет (при этом purge_old_posts его и не тронет)."""
     async with pool().acquire() as conn:
         return await conn.fetch(
             """
@@ -205,7 +223,14 @@ async def list_user_posts(owner_id: int, limit: int = 15):
                    COUNT(*) FILTER (WHERE pt.status != 'deleted') AS active_count
             FROM posts p
             JOIN post_targets pt ON pt.post_id = p.id
-            WHERE p.owner_id = $1 AND p.created_at > now() - interval '30 days'
+            WHERE p.owner_id = $1
+              AND (
+                  p.created_at > now() - interval '30 days'
+                  OR EXISTS (
+                      SELECT 1 FROM post_targets pt2
+                      WHERE pt2.post_id = p.id AND pt2.status = 'scheduled'
+                  )
+              )
             GROUP BY p.id
             HAVING COUNT(*) FILTER (WHERE pt.status != 'deleted') > 0
             ORDER BY p.created_at DESC

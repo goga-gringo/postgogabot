@@ -1,3 +1,4 @@
+import asyncio
 import html as html_lib
 import json
 import logging
@@ -5,8 +6,9 @@ import logging
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery, InputMediaPhoto, InputMediaVideo
+from aiogram.types import Message, CallbackQuery, InputMediaPhoto, InputMediaVideo, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.utils.text_decorations import html_decoration
 
 from bot import db
 from bot import ui
@@ -20,6 +22,8 @@ from bot.scheduler import _delete_comment_mirror
 
 router = Router()
 logger = logging.getLogger(__name__)
+
+CAPTION_LIMIT = 1000  # у caption лимит 1024 символа, оставляем небольшой запас
 
 
 def _plain_preview(text: str | None, lang: str, length: int = 40) -> str:
@@ -56,29 +60,21 @@ async def cmd_myposts(message: Message):
     await ui.track(user_id, sent)
 
 
-@router.callback_query(F.data.startswith("editpost:"))
-async def show_post(callback: CallbackQuery):
-    post_id = int(callback.data.split(":")[1])
-    user_id = await db.get_or_create_user(callback.from_user.id)
-    lang = await get_user_lang(user_id)
+async def _build_post_view(post_id: int, user_id: int, lang: str):
+    """Собирает (post, targets, текст/подпись, клавиатуру) для карточки поста.
+    Возвращает None вместо post, если пост не найден/чужой."""
     tz = await get_user_tz(user_id)
     post = await db.get_post(post_id)
     if not post or post["owner_id"] != user_id:
-        await callback.answer(t(lang, "myposts.not_found"), show_alert=True)
-        return
+        return None, None, None, None
 
     targets = await db.get_targets_for_post(post_id)
-    if all(tt["status"] == "deleted" for tt in targets):
-        b = InlineKeyboardBuilder()
-        b.row(home_button(lang))
-        await callback.message.edit_text(t(lang, "post.deleted_everywhere", id=post_id), reply_markup=b.as_markup())
-        await callback.answer()
-        return
 
     lines = [
-        f"<b>Пост #{post_id}</b> ({html_lib.escape(post['media_type'] or '')})",
+        f"<b>Пост #{post_id}</b>",
         "",
-        html_lib.escape(post["text"]) if post["text"] else f"<i>{t(lang, 'post.no_text')}</i>",
+        html_decoration.unparse(post["text"], deserialize_entities(post["entities_json"]))
+        if post["text"] else f"<i>{t(lang, 'post.no_text')}</i>",
         "",
         f"<b>{t(lang, 'post.channels_header')}</b>",
     ]
@@ -95,18 +91,74 @@ async def show_post(callback: CallbackQuery):
             line += f"\n   <code>{html_lib.escape(tt['error'][:200])}</code>"
         lines.append(line)
 
+    text = "\n".join(lines)
+
     b = InlineKeyboardBuilder()
+    button_rows = json.loads(post["button_json"]) if post["button_json"] else None
+    for row in (button_rows or []):
+        b.row(*[InlineKeyboardButton(text=btn["text"], url=btn["url"]) for btn in row])
+
     b.button(text=t(lang, "btn.edit_text"), callback_data=f"edittext:{post_id}")
     if post["media_type"] != "album":
         b.button(text=t(lang, "btn.edit_buttons"), callback_data=f"editbuttons:{post_id}")
-    if post["media_type"] in ("photo", "video"):
+    if post["media_type"] in ("photo", "video", "album"):
         b.button(text=t(lang, "btn.edit_media"), callback_data=f"editmedia:{post_id}")
     b.button(text=t(lang, "btn.delete_post"), callback_data=f"delpost:{post_id}")
     b.adjust(1)
     b.row(home_button(lang))
 
-    await callback.message.edit_text("\n".join(lines), reply_markup=b.as_markup(), parse_mode="HTML")
+    return post, targets, text, b.as_markup()
+
+
+async def _render_post(bot: Bot, chat_id: int, user_id: int, post_id: int, lang: str):
+    """Показывает карточку поста — с реальным фото/видео, если оно есть
+    (через file_id, сервер бота файл не хранит). Удаляет прошлый экран
+    и присылает свежий, чтобы не зависеть от того, был ли он текстом или медиа."""
+    post, targets, text, kb = await _build_post_view(post_id, user_id, lang)
+    if post is None:
+        return False
+
+    await ui.clear_previous(bot, chat_id, user_id)
+
+    if all(tt["status"] == "deleted" for tt in targets):
+        b = InlineKeyboardBuilder()
+        b.row(home_button(lang))
+        sent = await bot.send_message(chat_id, t(lang, "post.deleted_everywhere", id=post_id), reply_markup=b.as_markup())
+        await ui.track(user_id, sent)
+        return True
+
+    if post["media_type"] == "photo":
+        caption = text if len(text) <= CAPTION_LIMIT else text[:CAPTION_LIMIT] + "…"
+        sent = await bot.send_photo(chat_id, post["file_id"], caption=caption, parse_mode="HTML", reply_markup=kb)
+    elif post["media_type"] == "video":
+        caption = text if len(text) <= CAPTION_LIMIT else text[:CAPTION_LIMIT] + "…"
+        sent = await bot.send_video(chat_id, post["file_id"], caption=caption, parse_mode="HTML", reply_markup=kb)
+    else:
+        sent = await bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+
+    await ui.track(user_id, sent)
+    return True
+
+
+@router.callback_query(F.data.startswith("editpost:"))
+async def show_post(callback: CallbackQuery):
+    post_id = int(callback.data.split(":")[1])
+    user_id = await db.get_or_create_user(callback.from_user.id)
+    lang = await get_user_lang(user_id)
+
+    ok = await _render_post(callback.bot, callback.message.chat.id, user_id, post_id, lang)
+    if not ok:
+        await callback.answer(t(lang, "myposts.not_found"), show_alert=True)
+        return
     await callback.answer()
+
+
+async def _send_prompt(bot: Bot, chat_id: int, user_id: int, text: str, reply_markup=None):
+    """Небольшая текстовая подсказка поверх карточки поста — убираем
+    предыдущий экран (не важно, текст он или медиа) и шлём свежий."""
+    await ui.clear_previous(bot, chat_id, user_id)
+    sent = await bot.send_message(chat_id, text, reply_markup=reply_markup)
+    await ui.track(user_id, sent)
 
 
 # ---------- редактирование текста ----------
@@ -127,7 +179,7 @@ async def ask_new_text(callback: CallbackQuery, state: FSMContext):
     hint = t(lang, "edittext.hint_media") if post["media_type"] in ("photo", "video", "album") else t(lang, "edittext.hint_text")
     b = InlineKeyboardBuilder()
     b.row(home_button(lang))
-    await callback.message.edit_text(t(lang, "edittext.prompt", hint=hint), reply_markup=b.as_markup())
+    await _send_prompt(callback.bot, callback.message.chat.id, user_id, t(lang, "edittext.prompt", hint=hint), b.as_markup())
     await callback.answer()
 
 
@@ -176,9 +228,7 @@ async def apply_new_text(message: Message, state: FSMContext, bot: Bot):
     reply += t(lang, "edittext.scheduled_note")
 
     await ui.delete_user_message(message)
-    await ui.clear_previous(bot, message.chat.id, user_id)
-    sent = await message.answer(reply)
-    await ui.track(user_id, sent)
+    await _send_prompt(bot, message.chat.id, user_id, reply)
 
 
 # ---------- редактирование кнопок-ссылок ----------
@@ -210,10 +260,8 @@ async def ask_new_buttons(callback: CallbackQuery, state: FSMContext):
 
     b = InlineKeyboardBuilder()
     b.row(home_button(lang))
-    await callback.message.edit_text(
-        f"{t(lang, 'editbuttons.current_header')}\n{current_block}\n\n{t(lang, 'editbuttons.prompt')}",
-        reply_markup=b.as_markup(),
-    )
+    text = f"{t(lang, 'editbuttons.current_header')}\n{current_block}\n\n{t(lang, 'editbuttons.prompt')}"
+    await _send_prompt(callback.bot, callback.message.chat.id, user_id, text, b.as_markup())
     await callback.answer()
 
 
@@ -259,12 +307,14 @@ async def apply_new_buttons(message: Message, state: FSMContext, bot: Bot):
     if failed:
         reply += t(lang, "editbuttons.failed", failed=failed)
 
-    await ui.clear_previous(bot, message.chat.id, user_id)
-    sent = await message.answer(reply)
-    await ui.track(user_id, sent)
+    await _send_prompt(bot, message.chat.id, user_id, reply)
 
 
 # ---------- замена медиа ----------
+
+_edit_album_buffers: dict[str, list[Message]] = {}
+EDIT_ALBUM_WAIT_SECONDS = 1.3
+
 
 @router.callback_query(F.data.startswith("editmedia:"))
 async def ask_new_media(callback: CallbackQuery, state: FSMContext):
@@ -275,35 +325,87 @@ async def ask_new_media(callback: CallbackQuery, state: FSMContext):
     if not post or post["owner_id"] != user_id:
         await callback.answer(t(lang, "myposts.not_found"), show_alert=True)
         return
-    if post["media_type"] not in ("photo", "video"):
+    if post["media_type"] not in ("photo", "video", "album"):
         await callback.answer(t(lang, "editmedia.not_supported"), show_alert=True)
         return
 
     await state.set_state(EditPost.waiting_media)
     await state.update_data(edit_post_id=post_id)
 
+    prompt_key = "editmedia.album_prompt" if post["media_type"] == "album" else "editmedia.prompt"
     b = InlineKeyboardBuilder()
     b.row(home_button(lang))
-    await callback.message.edit_text(t(lang, "editmedia.prompt"), reply_markup=b.as_markup())
+    await _send_prompt(callback.bot, callback.message.chat.id, user_id, t(lang, prompt_key), b.as_markup())
     await callback.answer()
 
 
-@router.message(EditPost.waiting_media, F.photo | F.video)
-async def apply_new_media(message: Message, state: FSMContext, bot: Bot):
+@router.message(EditPost.waiting_media, (F.photo | F.video) & ~F.media_group_id)
+async def apply_new_media_single(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     post_id = data["edit_post_id"]
-    user_id = await db.get_or_create_user(message.from_user.id)
-    lang = await get_user_lang(user_id)
+    post = await db.get_post(post_id)
 
     if message.photo:
-        media_type, file_id = "photo", message.photo[-1].file_id
+        item_type, file_id = "photo", message.photo[-1].file_id
     else:
-        media_type, file_id = "video", message.video.file_id
+        item_type, file_id = "video", message.video.file_id
 
-    await db.update_post_media(post_id, file_id, media_type)
+    if post["media_type"] == "album":
+        # Заменяем альбом одним элементом — остаётся альбомом (пусть и из одной штуки),
+        # чтобы логика публикации (post_media) не путалась.
+        reply = await _apply_album_replacement(bot, post_id, [{"type": item_type, "file_id": file_id}])
+    else:
+        await db.update_post_media(post_id, file_id, item_type)
+        reply = await _apply_single_media_live_update(bot, post_id, item_type, file_id)
 
+    await state.clear()
+    await ui.delete_user_message(message)
+    user_id = await db.get_or_create_user(message.from_user.id)
+    await _send_prompt(bot, message.chat.id, user_id, reply)
+
+
+@router.message(EditPost.waiting_media, F.media_group_id)
+async def apply_new_media_album_part(message: Message, state: FSMContext, bot: Bot):
+    gid = message.media_group_id
+    buf = _edit_album_buffers.setdefault(gid, [])
+    buf.append(message)
+    if len(buf) == 1:
+        asyncio.create_task(_process_edit_album(gid, state, bot))
+
+
+async def _process_edit_album(gid: str, state: FSMContext, bot: Bot):
+    await asyncio.sleep(EDIT_ALBUM_WAIT_SECONDS)
+    messages = _edit_album_buffers.pop(gid, [])
+    if not messages:
+        return
+    messages.sort(key=lambda m: m.message_id)
+
+    items = []
+    for m in messages:
+        if m.photo:
+            items.append({"type": "photo", "file_id": m.photo[-1].file_id})
+        elif m.video:
+            items.append({"type": "video", "file_id": m.video.file_id})
+    if not items:
+        return
+
+    data = await state.get_data()
+    post_id = data["edit_post_id"]
+    reply = await _apply_album_replacement(bot, post_id, items)
+
+    await state.clear()
+    chat_id = messages[0].chat.id
+    for m in messages:
+        await ui.delete_user_message(m)
+    user_id = await db.get_or_create_user(messages[0].from_user.id)
+    await _send_prompt(bot, chat_id, user_id, reply)
+
+
+async def _apply_single_media_live_update(bot: Bot, post_id: int, media_type: str, file_id: str) -> str:
+    """Обновляет уже опубликованные посты 'вживую' и возвращает готовый текст отчёта."""
     post = await db.get_post(post_id)
     targets = await db.get_targets_for_post(post_id)
+    lang = await get_user_lang(post["owner_id"])
     entities = deserialize_entities(post["entities_json"])
     button_rows = json.loads(post["button_json"]) if post["button_json"] else None
     markup = link_buttons_only_markup(button_rows)
@@ -322,16 +424,55 @@ async def apply_new_media(message: Message, state: FSMContext, bot: Bot):
             logger.warning("Live media update failed for target %s: %s", tt["target_id"], e)
             failed += 1
 
-    await state.clear()
-    await ui.delete_user_message(message)
+    reply = t(lang, "editmedia.updated", updated=updated)
+    if failed:
+        reply += t(lang, "editmedia.failed", failed=failed)
+    return reply
+
+
+async def _apply_album_replacement(bot: Bot, post_id: int, items: list[dict]) -> str:
+    """Заменяет элементы альбома в БД, пробует обновить уже опубликованные посты
+    'вживую' (только там, где число фото/видео совпадает с прежним — Telegram не
+    позволяет менять размер уже готового альбома через editMessageMedia) и
+    возвращает готовый текст отчёта."""
+    await db.replace_album_items(post_id, items)
+
+    post = await db.get_post(post_id)
+    targets = await db.get_targets_for_post(post_id)
+    lang = await get_user_lang(post["owner_id"])
+    entities = deserialize_entities(post["entities_json"])
+
+    updated, failed, mismatched = 0, 0, 0
+    for tt in targets:
+        if tt["status"] != "published" or not tt["message_ids"]:
+            continue
+        if len(tt["message_ids"]) != len(items):
+            mismatched += 1
+            continue
+        ok = True
+        for idx, (mid, item) in enumerate(zip(tt["message_ids"], items)):
+            try:
+                cls = InputMediaPhoto if item["type"] == "photo" else InputMediaVideo
+                kwargs = {}
+                if idx == 0 and post["text"]:
+                    kwargs["caption"] = post["text"]
+                    kwargs["caption_entities"] = entities
+                new_media = cls(media=item["file_id"], **kwargs)
+                await bot.edit_message_media(chat_id=tt["chat_id"], message_id=mid, media=new_media)
+            except Exception as e:
+                logger.warning("Live album item update failed for target %s msg %s: %s", tt["target_id"], mid, e)
+                ok = False
+        if ok:
+            updated += 1
+        else:
+            failed += 1
 
     reply = t(lang, "editmedia.updated", updated=updated)
     if failed:
         reply += t(lang, "editmedia.failed", failed=failed)
-
-    await ui.clear_previous(bot, message.chat.id, user_id)
-    sent = await message.answer(reply)
-    await ui.track(user_id, sent)
+    if mismatched:
+        reply += t(lang, "editmedia.mismatch", n=mismatched)
+    return reply
 
 
 # ---------- удаление поста: везде или из одного канала ----------
@@ -353,7 +494,8 @@ async def ask_delete_scope(callback: CallbackQuery):
         return
 
     if len(active) == 1:
-        await _delete_targets(callback, post_id, [active[0]["target_id"]], lang)
+        await _delete_targets(callback.bot, callback.message.chat.id, user_id, post_id, [active[0]["target_id"]], lang)
+        await callback.answer()
         return
 
     b = InlineKeyboardBuilder()
@@ -363,7 +505,7 @@ async def ask_delete_scope(callback: CallbackQuery):
     b.button(text=t(lang, "btn.back_short"), callback_data=f"editpost:{post_id}")
     b.adjust(1)
     b.row(home_button(lang))
-    await callback.message.edit_text(t(lang, "delete.where"), reply_markup=b.as_markup())
+    await _send_prompt(callback.bot, callback.message.chat.id, user_id, t(lang, "delete.where"), b.as_markup())
     await callback.answer()
 
 
@@ -379,7 +521,8 @@ async def delete_all(callback: CallbackQuery):
 
     targets = await db.get_targets_for_post(post_id)
     ids = [tt["target_id"] for tt in targets if tt["status"] != "deleted"]
-    await _delete_targets(callback, post_id, ids, lang)
+    await _delete_targets(callback.bot, callback.message.chat.id, user_id, post_id, ids, lang)
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("delone:"))
@@ -392,12 +535,11 @@ async def delete_one(callback: CallbackQuery):
     if not post or post["owner_id"] != user_id:
         await callback.answer(t(lang, "myposts.not_found"), show_alert=True)
         return
-    await _delete_targets(callback, post_id, [target_id], lang)
+    await _delete_targets(callback.bot, callback.message.chat.id, user_id, post_id, [target_id], lang)
+    await callback.answer()
 
 
-async def _delete_targets(callback: CallbackQuery, post_id: int, target_ids: list[int], lang: str):
-    bot = callback.bot
-    user_id = await db.get_or_create_user(callback.from_user.id)
+async def _delete_targets(bot: Bot, chat_id: int, user_id: int, post_id: int, target_ids: list[int], lang: str):
     user = await db.get_user(user_id)
     delete_from_comments = bool(user and user["delete_from_comments"])
 
@@ -422,5 +564,4 @@ async def _delete_targets(callback: CallbackQuery, post_id: int, target_ids: lis
 
     b = InlineKeyboardBuilder()
     b.row(home_button(lang))
-    await callback.message.edit_text(t(lang, "delete.done", n=removed), reply_markup=b.as_markup())
-    await callback.answer()
+    await _send_prompt(bot, chat_id, user_id, t(lang, "delete.done", n=removed), b.as_markup())

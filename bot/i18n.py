@@ -227,8 +227,8 @@ T = {
     "editbuttons.failed": {"ru": "\n⚠️ Не удалось обновить {failed} шт.", "en": "\n⚠️ Failed to update {failed}."},
 
     "editmedia.not_supported": {
-        "ru": "Замена медиа работает только для одиночного фото/видео (не для альбомов и текста).",
-        "en": "Media replacement only works for a single photo/video (not albums or text).",
+        "ru": "Замена медиа работает только для фото/видео/альбома (не для текстовых постов).",
+        "en": "Media replacement only works for photo/video/album posts (not text-only).",
     },
     "editmedia.prompt": {
         "ru": (
@@ -242,11 +242,31 @@ T = {
             "/cancel — cancel, keep as is"
         ),
     },
+    "editmedia.album_prompt": {
+        "ru": (
+            "Пришли новый альбом (несколько фото/видео разом, можно и одно) — медиа "
+            "заменится. В карточке поста («📋 Мои посты») сами фото/видео альбома не "
+            "показываются в превью — только текст и статус, чтобы не захламлять экран "
+            "кучей картинок. На саму замену это не влияет, применится корректно.\n\n"
+            "/cancel — отменить, оставить как есть"
+        ),
+        "en": (
+            "Send a new album (several photos/videos at once, or just one) — the media "
+            "will be replaced. The post card (\u00ab📋 My posts\u00bb) doesn't preview the "
+            "album's actual photos/videos — just text and status, to avoid clutter. This "
+            "doesn't affect the replacement itself, it applies correctly.\n\n"
+            "/cancel — cancel, keep as is"
+        ),
+    },
     "editmedia.updated": {
         "ru": "✅ Медиа заменено.\nУже опубликованные посты обновлены: {updated}.",
         "en": "✅ Media replaced.\nAlready published posts updated: {updated}.",
     },
     "editmedia.failed": {"ru": "\n⚠️ Не удалось обновить {failed} шт.", "en": "\n⚠️ Failed to update {failed}."},
+    "editmedia.mismatch": {
+        "ru": "\n⚠️ У {n} шт. другое число фото/видео, чем было — Telegram не даёт менять размер альбома в готовом посте, эти остались без изменений.",
+        "en": "\n⚠️ {n} have a different item count than before — Telegram doesn't allow resizing an album in a published post, those were left unchanged.",
+    },
 
     # ---------- создание поста ----------
     "newpost.no_channels": {
