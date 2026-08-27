@@ -14,6 +14,10 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS delete_from_comments BOOLEAN NOT NULL
 -- id последнего "экранного" сообщения бота этому пользователю — чтобы удалять
 -- его перед показом нового экрана и не плодить вереницу сообщений с мёртвыми кнопками
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bot_message_id BIGINT;
+-- То же самое, но массивом — экран иногда состоит из нескольких сообщений
+-- (например медиа без подписи + отдельное сообщение с полным текстом статуса,
+-- когда исходный текст не влезает в лимит подписи к фото/видео).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bot_message_ids BIGINT[];
 -- Язык интерфейса: 'ru' | 'en'. NULL = ещё не выбран (спросим при /start).
 ALTER TABLE users ADD COLUMN IF NOT EXISTS language TEXT;
 -- Последние 3 вручную введённые даты/времени публикации (сырой текст, как

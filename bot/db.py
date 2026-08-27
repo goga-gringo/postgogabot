@@ -108,6 +108,13 @@ async def set_last_message_id(user_id: int, message_id: int | None):
         )
 
 
+async def set_last_message_ids(user_id: int, message_ids: list[int]):
+    async with pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET last_bot_message_ids = $2 WHERE id = $1", user_id, message_ids
+        )
+
+
 # ---------- channels ----------
 
 async def add_channel(owner_id: int, chat_id: int, title: str) -> int:

@@ -9,22 +9,30 @@ logger = logging.getLogger(__name__)
 
 
 async def clear_previous(bot: Bot, chat_id: int, user_id: int):
-    """Удаляет предыдущее 'экранное' сообщение бота этому пользователю, если есть.
-    Вызывать перед показом нового экрана (список каналов, список постов, настройки,
-    мастер создания поста), чтобы не плодить вереницу сообщений с мёртвыми кнопками."""
+    """Удаляет предыдущий 'экран' бота этому пользователю, если есть (может
+    состоять из нескольких сообщений — например медиа + отдельный статус-текст).
+    Вызывать перед показом нового экрана, чтобы не плодить вереницу сообщений
+    с мёртвыми кнопками."""
     user = await db.get_user(user_id)
-    last_id = user["last_bot_message_id"] if user else None
-    if not last_id:
+    ids = list(user["last_bot_message_ids"] or []) if user else []
+    if not ids:
         return
-    try:
-        await bot.delete_message(chat_id, last_id)
-    except Exception as e:
-        logger.debug("Could not delete previous screen message %s: %s", last_id, e)
+    for mid in ids:
+        try:
+            await bot.delete_message(chat_id, mid)
+        except Exception as e:
+            logger.debug("Could not delete previous screen message %s: %s", mid, e)
+    await db.set_last_message_ids(user_id, [])
 
 
-async def track(user_id: int, message: Message):
-    """Запоминаем id только что отправленного 'экранного' сообщения."""
-    await db.set_last_message_id(user_id, message.message_id)
+async def track(user_id: int, message_or_messages):
+    """Запоминаем id только что отправленного 'экрана' — одно сообщение или
+    список (если экран из нескольких, например медиа + статус отдельно)."""
+    if isinstance(message_or_messages, (list, tuple)):
+        ids = [m.message_id for m in message_or_messages]
+    else:
+        ids = [message_or_messages.message_id]
+    await db.set_last_message_ids(user_id, ids)
 
 
 async def delete_user_message(message: Message):

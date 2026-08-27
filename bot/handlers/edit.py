@@ -23,8 +23,6 @@ from bot.scheduler import _delete_comment_mirror
 router = Router()
 logger = logging.getLogger(__name__)
 
-CAPTION_LIMIT = 1000  # у caption лимит 1024 символа, оставляем небольшой запас
-
 
 def _plain_preview(text: str | None, lang: str, length: int = 40) -> str:
     if not text:
@@ -129,28 +127,40 @@ async def _render_post(bot: Bot, chat_id: int, user_id: int, post_id: int, lang:
         await ui.track(user_id, sent)
         return True
 
-    caption = text if len(text) <= CAPTION_LIMIT else text[:CAPTION_LIMIT] + "…"
-    sent = None
+    sent_messages = []
     try:
         if post["media_type"] == "photo":
-            sent = await bot.send_photo(chat_id, post["file_id"], caption=caption, parse_mode="HTML", reply_markup=kb)
+            sent = await bot.send_photo(chat_id, post["file_id"], caption=text, parse_mode="HTML", reply_markup=kb)
         elif post["media_type"] == "video":
-            sent = await bot.send_video(chat_id, post["file_id"], caption=caption, parse_mode="HTML", reply_markup=kb)
+            sent = await bot.send_video(chat_id, post["file_id"], caption=text, parse_mode="HTML", reply_markup=kb)
         else:
             sent = await bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+        sent_messages = [sent]
     except Exception as e:
-        logger.exception("Failed to render post %s (media_type=%s) for user %s: %s", post_id, post["media_type"], user_id, e)
-
-    if sent is None:
-        # Медиа (или даже сам текст) не отправился — не оставляем пользователя
-        # совсем без ответа, показываем хотя бы голый текст без разметки/медиа.
+        # Скорее всего текст не влез в лимит подписи (1024 символа у фото/видео) —
+        # НЕ обрезаем HTML вручную (можно перерезать тег пополам и получить битую
+        # разметку), а показываем медиа без подписи + текст отдельным сообщением
+        # (там лимит уже 4096, риска почти нет).
+        logger.warning("Caption send failed for post %s (media_type=%s), splitting: %s", post_id, post["media_type"], e)
         try:
-            sent = await bot.send_message(chat_id, html_lib.escape(text)[:3900], reply_markup=kb)
-        except Exception as e:
-            logger.exception("Fallback render also failed for post %s: %s", post_id, e)
+            if post["media_type"] == "photo":
+                media_sent = await bot.send_photo(chat_id, post["file_id"])
+                status_sent = await bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+                sent_messages = [media_sent, status_sent]
+            elif post["media_type"] == "video":
+                media_sent = await bot.send_video(chat_id, post["file_id"])
+                status_sent = await bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+                sent_messages = [media_sent, status_sent]
+            else:
+                # Текстовый пост — тут уже сам лимит 4096 виноват (огромный текст),
+                # в этом случае безопасно режем ПРОСТОЙ (экранированный) текст без разметки.
+                status_sent = await bot.send_message(chat_id, html_lib.escape(text)[:3900], reply_markup=kb)
+                sent_messages = [status_sent]
+        except Exception as e2:
+            logger.exception("Fallback render also failed for post %s: %s", post_id, e2)
             return False
 
-    await ui.track(user_id, sent)
+    await ui.track(user_id, sent_messages)
     return True
 
 
