@@ -46,7 +46,7 @@ async def cmd_myposts(message: Message):
     b = InlineKeyboardBuilder()
     for p in posts:
         preview = _plain_preview(p["text"], lang)
-        date_str = p["created_at"].astimezone(tz).strftime("%d.%m %H:%M")
+        date_str = p["publish_at"].astimezone(tz).strftime("%d.%m %H:%M")
         if p["scheduled_count"] > 0:
             status_emoji = "⏰"
         elif p["published_count"] > 0:

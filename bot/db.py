@@ -219,11 +219,14 @@ async def list_user_posts(owner_id: int, limit: int = 15):
     """Список для 'Мои посты'. Скрываем старше 30 дней, НО не скрываем,
     если у поста ещё осталась запланированная (не вышедшая) цель — иначе
     пост, запланированный далеко вперёд, пропадал бы из списка раньше,
-    чем реально выйдет (при этом purge_old_posts его и не тронет)."""
+    чем реально выйдет (при этом purge_old_posts его и не тронет).
+    Сортировка и отображаемое время — по publish_at (на что заложен пост),
+    а не по дате создания; у всех целей одного поста время публикации общее."""
     async with pool().acquire() as conn:
         return await conn.fetch(
             """
             SELECT p.id, p.text, p.media_type, p.created_at,
+                   MIN(pt.publish_at) AS publish_at,
                    COUNT(pt.id) AS targets_count,
                    COUNT(*) FILTER (WHERE pt.status = 'published') AS published_count,
                    COUNT(*) FILTER (WHERE pt.status = 'scheduled') AS scheduled_count,
@@ -240,7 +243,7 @@ async def list_user_posts(owner_id: int, limit: int = 15):
               )
             GROUP BY p.id
             HAVING COUNT(*) FILTER (WHERE pt.status != 'deleted') > 0
-            ORDER BY p.created_at DESC
+            ORDER BY MIN(pt.publish_at) DESC
             LIMIT $2
             """,
             owner_id, limit,
