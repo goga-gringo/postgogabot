@@ -447,7 +447,7 @@ async def _apply_single_media_live_update(bot: Bot, post_id: int, media_type: st
         first_id = tt["message_ids"][0]
         try:
             cls = InputMediaPhoto if media_type == "photo" else InputMediaVideo
-            new_media = cls(media=file_id, caption=post["text"], caption_entities=entities)
+            new_media = cls(media=file_id, caption=post["text"], caption_entities=entities, parse_mode=None)
             await bot.edit_message_media(chat_id=tt["chat_id"], message_id=first_id, media=new_media, reply_markup=markup)
             updated += 1
         except Exception as e:
@@ -483,7 +483,7 @@ async def _apply_album_replacement(bot: Bot, post_id: int, items: list[dict]) ->
         for idx, (mid, item) in enumerate(zip(tt["message_ids"], items)):
             try:
                 cls = InputMediaPhoto if item["type"] == "photo" else InputMediaVideo
-                kwargs = {}
+                kwargs = {"parse_mode": None}
                 if idx == 0 and post["text"]:
                     kwargs["caption"] = post["text"]
                     kwargs["caption_entities"] = entities
