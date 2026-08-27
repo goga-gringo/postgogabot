@@ -28,6 +28,8 @@ T = {
     "btn.default_delete_hours": {"ru": "По умолчанию: {h}ч", "en": "Default: {h}h"},
     "btn.default_never": {"ru": "По умолчанию: не удалять", "en": "Default: never delete"},
     "btn.edit_text": {"ru": "✏️ Изменить текст", "en": "✏️ Edit text"},
+    "btn.edit_buttons": {"ru": "🔗 Изменить кнопки", "en": "🔗 Edit buttons"},
+    "btn.edit_media": {"ru": "🖼 Заменить медиа", "en": "🖼 Replace media"},
     "btn.delete_post": {"ru": "🗑 Удалить пост", "en": "🗑 Delete post"},
     "btn.delete_everywhere": {"ru": "🗑 Удалить везде ({n})", "en": "🗑 Delete everywhere ({n})"},
     "btn.only_channel": {"ru": "📍 Только «{title}»", "en": "📍 Only \u00ab{title}\u00bb"},
@@ -193,6 +195,58 @@ T = {
     "delete.where": {"ru": "Где удалить пост?", "en": "Where should I delete the post?"},
     "delete.nowhere_active": {"ru": "Пост уже нигде не активен.", "en": "The post isn't active anywhere anymore."},
     "delete.done": {"ru": "🗑 Удалено: {n} шт.", "en": "🗑 Deleted: {n}."},
+
+    "editbuttons.current_header": {"ru": "<b>Текущие кнопки:</b>", "en": "<b>Current buttons:</b>"},
+    "editbuttons.none": {"ru": "(кнопок пока нет)", "en": "(no buttons yet)"},
+    "editbuttons.not_for_album": {
+        "ru": "У альбомов кнопок не бывает — ограничение Telegram.",
+        "en": "Albums can't have buttons — Telegram limitation.",
+    },
+    "editbuttons.prompt": {
+        "ru": (
+            "Пришли новые кнопки — они <b>полностью заменят</b> текущие (не добавятся к ним).\n"
+            "Формат — как при создании поста: <code>Текст - ссылка</code> на строку, "
+            "несколько в один ряд — через <code>|</code>.\n"
+            "Количество может быть любым: было 2 — станет хоть 1, хоть 5.\n"
+            "Чтобы убрать кнопки совсем — пришли <code>-</code>\n\n"
+            "/cancel — отменить, оставить как есть"
+        ),
+        "en": (
+            "Send new buttons — they'll <b>fully replace</b> the current ones (not added to them).\n"
+            "Format — same as when creating a post: <code>Text - link</code> per line, "
+            "several in one row — separated by <code>|</code>.\n"
+            "Count can be anything: had 2 — can become 1 or 5.\n"
+            "To remove all buttons — send <code>-</code>\n\n"
+            "/cancel — cancel, keep as is"
+        ),
+    },
+    "editbuttons.updated": {
+        "ru": "✅ Кнопки обновлены.\nУже опубликованные посты обновлены: {updated}.",
+        "en": "✅ Buttons updated.\nAlready published posts updated: {updated}.",
+    },
+    "editbuttons.failed": {"ru": "\n⚠️ Не удалось обновить {failed} шт.", "en": "\n⚠️ Failed to update {failed}."},
+
+    "editmedia.not_supported": {
+        "ru": "Замена медиа работает только для одиночного фото/видео (не для альбомов и текста).",
+        "en": "Media replacement only works for a single photo/video (not albums or text).",
+    },
+    "editmedia.prompt": {
+        "ru": (
+            "Пришли новое фото или видео — заменит текущее медиа везде, включая уже "
+            "опубликованные посты. Текст и кнопки останутся прежними.\n\n"
+            "/cancel — отменить, оставить как есть"
+        ),
+        "en": (
+            "Send a new photo or video — it'll replace the current media everywhere, "
+            "including already published posts. Text and buttons stay the same.\n\n"
+            "/cancel — cancel, keep as is"
+        ),
+    },
+    "editmedia.updated": {
+        "ru": "✅ Медиа заменено.\nУже опубликованные посты обновлены: {updated}.",
+        "en": "✅ Media replaced.\nAlready published posts updated: {updated}.",
+    },
+    "editmedia.failed": {"ru": "\n⚠️ Не удалось обновить {failed} шт.", "en": "\n⚠️ Failed to update {failed}."},
 
     # ---------- создание поста ----------
     "newpost.no_channels": {

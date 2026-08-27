@@ -26,7 +26,7 @@ async def _publish_via_copy(bot: Bot, row) -> list[int] | None:
     как есть на своей стороне, со всеми entities (включая premium-эмодзи),
     без пересборки ботом. Возвращает None, если не получилось (сообщение
     в личке удалено, пост правили и т.п.) — тогда используем реконструкцию."""
-    if row["text_edited"] or not row["source_chat_id"] or not row["source_message_ids"]:
+    if row["text_edited"] or row["media_edited"] or not row["source_chat_id"] or not row["source_message_ids"]:
         return None
     try:
         if row["media_type"] == "album":

@@ -12,3 +12,5 @@ class NewPost(StatesGroup):
 
 class EditPost(StatesGroup):
     waiting_text = State()
+    waiting_buttons = State()
+    waiting_media = State()

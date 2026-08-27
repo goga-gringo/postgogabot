@@ -58,6 +58,9 @@ ALTER TABLE posts ADD COLUMN IF NOT EXISTS silent BOOLEAN NOT NULL DEFAULT false
 -- {text, url}. Не работает для альбомов — Telegram не поддерживает
 -- reply_markup в sendMediaGroup/copyMessages.
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS button_json TEXT;
+-- Если медиа поменяли после создания — оригинал в личке больше не совпадает
+-- с текущим file_id, публикуем через пересборку, а не copyMessage.
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS media_edited BOOLEAN NOT NULL DEFAULT false;
 
 -- Элементы альбома (media_type = 'album'), по порядку
 CREATE TABLE IF NOT EXISTS post_media (

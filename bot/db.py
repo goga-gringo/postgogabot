@@ -179,6 +179,19 @@ async def update_post_text(post_id: int, text: str | None, entities_json: str | 
         )
 
 
+async def update_post_buttons(post_id: int, button_json: str | None):
+    async with pool().acquire() as conn:
+        await conn.execute("UPDATE posts SET button_json = $2 WHERE id = $1", post_id, button_json)
+
+
+async def update_post_media(post_id: int, file_id: str, media_type: str):
+    async with pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE posts SET file_id = $2, media_type = $3, media_edited = true WHERE id = $1",
+            post_id, file_id, media_type,
+        )
+
+
 async def list_user_posts(owner_id: int, limit: int = 15):
     """Список для 'Мои посты'. Старше 30 дней не показываем — но реально их
     к этому моменту уже нет в БД, см. purge_old_posts()."""
@@ -268,7 +281,7 @@ async def fetch_due_to_publish():
             """
             SELECT pt.id AS target_id, pt.post_id, pt.channel_id, pt.delete_after_hours,
                    p.text, p.media_type, p.file_id, p.entities_json, p.button_json, p.silent,
-                   p.source_chat_id, p.source_message_ids, p.text_edited,
+                   p.source_chat_id, p.source_message_ids, p.text_edited, p.media_edited,
                    c.chat_id
             FROM post_targets pt
             JOIN posts p ON p.id = pt.post_id
