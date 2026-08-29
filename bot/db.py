@@ -215,11 +215,13 @@ async def replace_album_items(post_id: int, items: list[dict]):
             await conn.execute("UPDATE posts SET media_edited = true WHERE id = $1", post_id)
 
 
-async def list_user_posts(owner_id: int, limit: int = 15):
-    """Список для 'Мои посты'. Скрываем старше 30 дней, НО не скрываем,
-    если у поста ещё осталась запланированная (не вышедшая) цель — иначе
-    пост, запланированный далеко вперёд, пропадал бы из списка раньше,
+async def list_user_posts(owner_id: int, limit: int = 10, offset: int = 0):
+    """Список для 'Мои посты' (постранично). Скрываем старше 30 дней, НО не
+    скрываем, если у поста ещё осталась запланированная (не вышедшая) цель —
+    иначе пост, запланированный далеко вперёд, пропадал бы из списка раньше,
     чем реально выйдет (при этом purge_old_posts его и не тронет).
+    Полностью удалённые посты теперь ПОКАЗЫВАЕМ (со статусом 🗑 на стороне
+    хендлера) — те же 30 дней, потом покажутся в фоне и очистятся сами.
     Сортировка и отображаемое время — по publish_at (на что заложен пост),
     а не по дате создания; у всех целей одного поста время публикации общее."""
     async with pool().acquire() as conn:
@@ -242,12 +244,37 @@ async def list_user_posts(owner_id: int, limit: int = 15):
                   )
               )
             GROUP BY p.id
-            HAVING COUNT(*) FILTER (WHERE pt.status != 'deleted') > 0
             ORDER BY MIN(pt.publish_at) DESC
-            LIMIT $2
+            LIMIT $2 OFFSET $3
             """,
-            owner_id, limit,
+            owner_id, limit, offset,
         )
+
+
+async def count_user_posts(owner_id: int) -> int:
+    """Общее число постов, которые покажет list_user_posts (для пагинации) —
+    тот же фильтр видимости, без LIMIT/OFFSET."""
+    async with pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT COUNT(*) AS c FROM (
+                SELECT p.id
+                FROM posts p
+                JOIN post_targets pt ON pt.post_id = p.id
+                WHERE p.owner_id = $1
+                  AND (
+                      p.created_at > now() - interval '30 days'
+                      OR EXISTS (
+                          SELECT 1 FROM post_targets pt2
+                          WHERE pt2.post_id = p.id AND pt2.status = 'scheduled'
+                      )
+                  )
+                GROUP BY p.id
+            ) sub
+            """,
+            owner_id,
+        )
+        return row["c"]
 
 
 async def purge_old_posts(days: int = 30) -> int:

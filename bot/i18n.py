@@ -163,6 +163,7 @@ T = {
         "en": "No posts yet. Send text/photo/video to create the first one.",
     },
     "myposts.header": {"ru": "Твои последние посты:", "en": "Your recent posts:"},
+    "myposts.page_indicator": {"ru": "Страница {page}/{total}", "en": "Page {page}/{total}"},
     "myposts.not_found": {"ru": "Пост не найден", "en": "Post not found"},
     "post.deleted_everywhere": {"ru": "Пост #{id} удалён отовсюду.", "en": "Post #{id} deleted everywhere."},
     "post.no_text": {"ru": "(без текста)", "en": "(no text)"},

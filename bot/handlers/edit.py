@@ -31,23 +31,46 @@ def _plain_preview(text: str | None, lang: str, length: int = 40) -> str:
     return plain[:length] + ("…" if len(plain) > length else "")
 
 
+MYPOSTS_PAGE_SIZE = 10
+
+
 @router.message(Command("myposts"))
 async def cmd_myposts(message: Message):
     user_id = await db.get_or_create_user(message.from_user.id)
+    await _send_myposts_page(message.bot, message.chat.id, user_id, 0)
+
+
+@router.callback_query(F.data.startswith("myposts_page:"))
+async def cb_myposts_page(callback: CallbackQuery):
+    page = int(callback.data.split(":")[1])
+    user_id = await db.get_or_create_user(callback.from_user.id)
+    await _send_myposts_page(callback.bot, callback.message.chat.id, user_id, page)
+    await callback.answer()
+
+
+async def _send_myposts_page(bot: Bot, chat_id: int, user_id: int, page: int):
     lang = await get_user_lang(user_id)
     tz = await get_user_tz(user_id)
-    posts = await db.list_user_posts(user_id)
-    await ui.clear_previous(message.bot, message.chat.id, user_id)
-    if not posts:
-        sent = await message.answer(t(lang, "myposts.none"))
+
+    total = await db.count_user_posts(user_id)
+    await ui.clear_previous(bot, chat_id, user_id)
+
+    if total == 0:
+        sent = await bot.send_message(chat_id, t(lang, "myposts.none"))
         await ui.track(user_id, sent)
         return
+
+    total_pages = max(1, (total + MYPOSTS_PAGE_SIZE - 1) // MYPOSTS_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    posts = await db.list_user_posts(user_id, limit=MYPOSTS_PAGE_SIZE, offset=page * MYPOSTS_PAGE_SIZE)
 
     b = InlineKeyboardBuilder()
     for p in posts:
         preview = _plain_preview(p["text"], lang)
         date_str = p["publish_at"].astimezone(tz).strftime("%d.%m %H:%M")
-        if p["scheduled_count"] > 0:
+        if p["active_count"] == 0:
+            status_emoji = "🗑"
+        elif p["scheduled_count"] > 0:
             status_emoji = "⏰"
         elif p["published_count"] > 0:
             status_emoji = "✅"
@@ -55,8 +78,22 @@ async def cmd_myposts(message: Message):
             status_emoji = "⚠️"
         b.button(text=f"{date_str} {status_emoji} {preview}", callback_data=f"editpost:{p['id']}")
     b.adjust(1)
+
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton(text="◀️", callback_data=f"myposts_page:{page - 1}"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton(text="▶️", callback_data=f"myposts_page:{page + 1}"))
+    if nav_row:
+        b.row(*nav_row)
+
     b.row(home_button(lang))
-    sent = await message.answer(t(lang, "myposts.header"), reply_markup=b.as_markup())
+
+    header = t(lang, "myposts.header")
+    if total_pages > 1:
+        header += "\n" + t(lang, "myposts.page_indicator", page=page + 1, total=total_pages)
+
+    sent = await bot.send_message(chat_id, header, reply_markup=b.as_markup())
     await ui.track(user_id, sent)
 
 
