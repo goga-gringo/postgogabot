@@ -8,6 +8,8 @@ class NewPost(StatesGroup):
     choosing_time = State()
     waiting_custom_time = State()
     waiting_buttons = State()
+    editing_text = State()
+    editing_media = State()
 
 
 class EditPost(StatesGroup):

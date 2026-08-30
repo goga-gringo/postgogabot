@@ -54,12 +54,16 @@ def delete_after_keyboard(default_hours: int | None = None, lang: str = DEFAULT_
     return b.as_markup()
 
 
-def preview_keyboard(link_button_rows=None, allow_link_buttons: bool = True, lang: str = DEFAULT_LANG, silent: bool = False) -> InlineKeyboardMarkup:
+def preview_keyboard(link_button_rows=None, allow_link_buttons: bool = True, lang: str = DEFAULT_LANG, silent: bool = False, allow_media_edit: bool = True) -> InlineKeyboardMarkup:
     """Клавиатура под предпросмотром: сверху кнопки-ссылки (если есть),
-    снизу управление ботом (звук / когда публиковать / добавить кнопки)."""
+    снизу управление ботом (правка текста/медиа, звук, когда публиковать, добавить кнопки)."""
     b = InlineKeyboardBuilder()
     for row in (link_button_rows or []):
         b.row(*[InlineKeyboardButton(text=btn["text"], url=btn["url"]) for btn in row])
+
+    b.row(InlineKeyboardButton(text=t(lang, "btn.edit_text"), callback_data="edit_preview_text"))
+    if allow_media_edit:
+        b.row(InlineKeyboardButton(text=t(lang, "btn.edit_media"), callback_data="edit_preview_media"))
 
     sound_label = t(lang, "btn.silent_on") if silent else t(lang, "btn.silent_off")
     b.row(InlineKeyboardButton(text=sound_label, callback_data="toggle_silent"))

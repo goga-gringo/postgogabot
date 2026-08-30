@@ -342,6 +342,26 @@ T = {
         "en": "{hint}Format: <code>Text - link</code>. The link must start with http://, https:// or tg://. Try again, or \u00ab🔙 Back\u00bb.",
     },
     "newpost.link_buttons_bad_part": {"ru": "Не понял часть: <code>{part}</code>\n", "en": "Didn't understand this part: <code>{part}</code>\n"},
+    "newpost.edit_text_prompt": {
+        "ru": "Пришли новый текст поста (форматирование и premium-эмодзи сохранятся).\n\n/cancel — отменить, оставить как есть",
+        "en": "Send new post text (formatting and premium emoji are preserved).\n\n/cancel — cancel, keep as is",
+    },
+    "newpost.edit_media_prompt": {
+        "ru": "Пришли новое фото или видео — заменит текущее в этом черновике. Текст и кнопки останутся прежними.\n\n/cancel — отменить, оставить как есть",
+        "en": "Send a new photo or video — it'll replace the current one in this draft. Text and buttons stay the same.\n\n/cancel — cancel, keep as is",
+    },
+    "newpost.edit_media_album_prompt": {
+        "ru": (
+            "Пришли новый альбом (несколько фото/видео разом, можно и одно) — заменит текущий "
+            "в этом черновике. Текст и кнопки останутся прежними.\n\n"
+            "/cancel — отменить, оставить как есть"
+        ),
+        "en": (
+            "Send a new album (several photos/videos at once, or just one) — it'll replace the "
+            "current one in this draft. Text and buttons stay the same.\n\n"
+            "/cancel — cancel, keep as is"
+        ),
+    },
     "newpost.finalize": {
         "ru": (
             "✅ Готово!\n\n"

@@ -370,7 +370,8 @@ async def _send_preview(message: Message, data: dict, state: FSMContext):
     link_buttons = data.get("link_buttons")
     silent = data.get("silent", False)
     allow_link_buttons = media_type != "album"  # Telegram не поддерживает reply_markup в альбомах
-    kb = preview_keyboard(link_buttons, allow_link_buttons, lang, silent)
+    allow_media_edit = media_type != "text"
+    kb = preview_keyboard(link_buttons, allow_link_buttons, lang, silent, allow_media_edit)
 
     if media_type == "photo":
         sent = await message.answer_photo(
@@ -426,8 +427,150 @@ async def toggle_silent(callback: CallbackQuery, state: FSMContext):
     await state.update_data(silent=silent)
 
     allow_link_buttons = data["media_type"] != "album"
-    kb = preview_keyboard(data.get("link_buttons"), allow_link_buttons, lang, silent)
+    allow_media_edit = data["media_type"] != "text"
+    kb = preview_keyboard(data.get("link_buttons"), allow_link_buttons, lang, silent, allow_media_edit)
     await callback.message.edit_reply_markup(reply_markup=kb)
+    await callback.answer()
+
+
+# ---------- правка текста/медиа прямо на экране предпросмотра (до публикации) ----------
+# Если меняем текст или медиа здесь — исходное сообщение в личке (на которое
+# рассчитан быстрый copy_message) больше не совпадает с новым содержимым,
+# поэтому обнуляем source_chat_id/source_message_ids: публикация уйдёт через
+# пересборку (file_id/text/entities из состояния), а не копированием старья.
+# Premium-эмодзи это не портит — reconstruct-путь передаёт entities явно и
+# работает так же надёжно, как и copy, при активной Fragment-лицензии бота.
+
+_preview_edit_album_buffers: dict[str, list[Message]] = {}
+
+
+@router.callback_query(NewPost.choosing_time, F.data == "edit_preview_text")
+async def start_edit_preview_text(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    lang = await get_user_lang(data["user_id"])
+    await state.set_state(NewPost.editing_text)
+
+    preview_id = data.get("preview_message_id")
+    if preview_id:
+        try:
+            await callback.bot.edit_message_reply_markup(
+                callback.message.chat.id, preview_id, reply_markup=back_only_keyboard(lang)
+            )
+        except Exception:
+            pass
+
+    sent = await callback.message.answer(t(lang, "newpost.edit_text_prompt"), reply_markup=back_only_keyboard(lang))
+    await ui.track(data["user_id"], sent)
+    await callback.answer()
+
+
+@router.message(NewPost.editing_text, F.text & ~F.text.startswith("/"))
+async def apply_edit_preview_text(message: Message, state: FSMContext):
+    await state.update_data(
+        text=message.text,
+        entities_json=serialize_entities(message.entities),
+        source_chat_id=None, source_message_ids=None,
+    )
+    data = await state.get_data()
+    await ui.delete_user_message(message)
+    await _return_to_preview(message.bot, message.chat.id, state, data, message)
+
+
+@router.callback_query(NewPost.editing_text, F.data == "preview_back")
+async def back_from_edit_preview_text(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await _return_to_preview(callback.bot, callback.message.chat.id, state, data, callback.message)
+    await callback.answer()
+
+
+@router.callback_query(NewPost.choosing_time, F.data == "edit_preview_media")
+async def start_edit_preview_media(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    lang = await get_user_lang(data["user_id"])
+    if data["media_type"] == "text":
+        await callback.answer(t(lang, "editmedia.not_supported"), show_alert=True)
+        return
+    await state.set_state(NewPost.editing_media)
+
+    preview_id = data.get("preview_message_id")
+    if preview_id:
+        try:
+            await callback.bot.edit_message_reply_markup(
+                callback.message.chat.id, preview_id, reply_markup=back_only_keyboard(lang)
+            )
+        except Exception:
+            pass
+
+    prompt_key = "newpost.edit_media_album_prompt" if data["media_type"] == "album" else "newpost.edit_media_prompt"
+    sent = await callback.message.answer(t(lang, prompt_key), reply_markup=back_only_keyboard(lang))
+    await ui.track(data["user_id"], sent)
+    await callback.answer()
+
+
+@router.message(NewPost.editing_media, (F.photo | F.video) & ~F.media_group_id)
+async def apply_edit_preview_media_single(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if message.photo:
+        item_type, file_id = "photo", message.photo[-1].file_id
+    else:
+        item_type, file_id = "video", message.video.file_id
+
+    if data["media_type"] == "album":
+        # Заменяем альбом одним элементом — остаётся альбомом (пусть и из одной штуки).
+        await state.update_data(
+            album_items=[{"type": item_type, "file_id": file_id}],
+            source_chat_id=None, source_message_ids=None,
+        )
+    else:
+        await state.update_data(
+            media_type=item_type, file_id=file_id,
+            source_chat_id=None, source_message_ids=None,
+        )
+
+    data = await state.get_data()
+    await ui.delete_user_message(message)
+    await _return_to_preview(message.bot, message.chat.id, state, data, message)
+
+
+@router.message(NewPost.editing_media, F.media_group_id)
+async def apply_edit_preview_media_album_part(message: Message, state: FSMContext, bot: Bot):
+    gid = message.media_group_id
+    buf = _preview_edit_album_buffers.setdefault(gid, [])
+    buf.append(message)
+    if len(buf) == 1:
+        asyncio.create_task(_process_edit_preview_album(gid, state, bot))
+
+
+async def _process_edit_preview_album(gid: str, state: FSMContext, bot: Bot):
+    await asyncio.sleep(ALBUM_WAIT_SECONDS)
+    messages = _preview_edit_album_buffers.pop(gid, [])
+    if not messages:
+        return
+    messages.sort(key=lambda m: m.message_id)
+
+    items = []
+    for m in messages:
+        if m.photo:
+            items.append({"type": "photo", "file_id": m.photo[-1].file_id})
+        elif m.video:
+            items.append({"type": "video", "file_id": m.video.file_id})
+    if not items:
+        return
+
+    await state.update_data(
+        media_type="album", album_items=items,
+        source_chat_id=None, source_message_ids=None,
+    )
+    data = await state.get_data()
+    for m in messages:
+        await ui.delete_user_message(m)
+    await _return_to_preview(bot, messages[0].chat.id, state, data, messages[0])
+
+
+@router.callback_query(NewPost.editing_media, F.data == "preview_back")
+async def back_from_edit_preview_media(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await _return_to_preview(callback.bot, callback.message.chat.id, state, data, callback.message)
     await callback.answer()
 
 
